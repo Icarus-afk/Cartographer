@@ -444,6 +444,43 @@ def query(ctx, query_str, repo, limit, max_tokens, verbose):
     click.echo(result)
 
 
+# ── mcp command ────────────────────────────────────────────────────────────────
+
+
+@main.command()
+@click.option("--db", default=None, help="Database path", envvar="CARTOGRAPHER_DB")
+def mcp(db):
+    """Run the MCP server for AI assistant integration.
+
+    Starts a Model Context Protocol server that exposes Cartographer's
+    knowledge graph as tools for AI assistants (Claude Desktop, Cursor, etc.).
+
+    Configure your AI assistant client to use this server:
+
+    Claude Desktop (claude_desktop_config.json):
+    {
+      "mcpServers": {
+        "cartographer": {
+          "command": "cartographer-mcp",
+          "args": []
+        }
+      }
+    }
+
+    Cursor:
+    {
+      "mcpServers": {
+        "cartographer": {
+          "command": "cartographer-mcp",
+          "args": []
+        }
+      }
+    }
+    """
+    from cartographer.mcp.server import main as mcp_main
+    mcp_main()
+
+
 # ── git commands ──────────────────────────────────────────────────────────────
 
 
