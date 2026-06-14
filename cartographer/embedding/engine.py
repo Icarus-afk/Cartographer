@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import struct
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from fastembed import TextEmbedding
 from tqdm import tqdm
 
@@ -20,7 +20,7 @@ def _get_model() -> TextEmbedding:
     return _model
 
 
-EMBEDDABLE_TYPES = {"class", "function", "method", "file", "interface", "enum"}
+EMBEDDABLE_TYPES = {"class", "function", "method", "file", "interface", "enum", "type_alias"}
 
 
 def _build_node_text(name: str, node_type: str, file_path: str, metadata: dict[str, Any]) -> str:
@@ -30,15 +30,6 @@ def _build_node_text(name: str, node_type: str, file_path: str, metadata: dict[s
     if metadata.get("docstring"):
         parts.append(f"docstring: {metadata['docstring']}")
     return "\n".join(parts)
-
-
-def _vector_to_blob(vector: list[float]) -> bytes:
-    return struct.pack(f"{len(vector)}f", *vector)
-
-
-def _blob_to_vector(blob: bytes) -> list[float]:
-    n = len(blob) // 4
-    return list(struct.unpack(f"{n}f", blob))
 
 
 def generate_embeddings(
@@ -92,7 +83,7 @@ def generate_embeddings(
     ):
         conn.execute(
             "INSERT INTO embeddings (node_id, model, vector) VALUES (?, ?, ?)",
-            (node_id, EMBEDDING_MODEL, _vector_to_blob(vector)),
+            (node_id, EMBEDDING_MODEL, np.array(vector, dtype=np.float32).tobytes()),
         )
         inserted += 1
 
@@ -101,13 +92,46 @@ def generate_embeddings(
     return inserted
 
 
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(x * x for x in b) ** 0.5
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
+def _load_vectors(
+    db_path: Path, repo_name: str | None = None, exclude_id: int | None = None
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
+    from cartographer.storage.connection import get_connection
+    conn = get_connection(db_path)
+
+    params: list[Any] = [EMBEDDING_MODEL]
+    exclude_clause = ""
+    if exclude_id is not None:
+        exclude_clause = "AND n.id != ?"
+        params.append(exclude_id)
+
+    repo_clause = ""
+    if repo_name:
+        repo_clause = "AND r.name = ?"
+        params.append(repo_name)
+
+    rows = conn.execute(
+        f"""SELECT n.id, n.name, n.node_type, n.file_path, emb.vector
+            FROM embeddings emb
+            JOIN nodes n ON emb.node_id = n.id
+            JOIN repositories r ON n.repository_id = r.id
+            WHERE emb.model = ?
+            {exclude_clause}
+            {repo_clause}
+         """,
+        params,
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return np.empty((0, EMBEDDING_DIM), dtype=np.float32), []
+
+    blobs = [r[4] for r in rows]
+    vectors = np.frombuffer(b"".join(blobs), dtype=np.float32).reshape(len(rows), EMBEDDING_DIM)
+    records = [
+        {"id": r[0], "name": r[1], "type": r[2], "file_path": r[3]}
+        for r in rows
+    ]
+    return vectors, records
 
 
 def similarity_search(
@@ -117,46 +141,27 @@ def similarity_search(
     repo_name: str | None = None,
 ) -> list[dict[str, Any]]:
     model = _get_model()
-    query_vec = list(model.embed([query]))[0]
+    query_vec = np.array(list(model.embed([query]))[0], dtype=np.float32)
 
-    from cartographer.storage.connection import get_connection
-    conn = get_connection(db_path)
+    vectors, records = _load_vectors(db_path, repo_name)
+    if len(vectors) == 0:
+        return []
 
-    repo_filter = ""
-    params: list[str] = []
-    if repo_name:
-        repo_filter = "AND r.name = ?"
-        params.append(repo_name)
+    norms = np.linalg.norm(vectors, axis=1)
+    dot = vectors @ query_vec
+    scores = dot / (norms * np.linalg.norm(query_vec))
 
-    rows = conn.execute(
-        f"""SELECT n.id, n.name, n.node_type, n.file_path, emb.vector, r.name as repo_name
-            FROM embeddings emb
-            JOIN nodes n ON emb.node_id = n.id
-            JOIN repositories r ON n.repository_id = r.id
-            WHERE emb.model = ?
-            {repo_filter}
-         """,
-        [EMBEDDING_MODEL, *params],
-    ).fetchall()
+    top_k = min(limit, len(scores))
+    top_indices = np.argpartition(-scores, top_k)[:top_k]
+    top_order = top_indices[np.argsort(-scores[top_indices])]
 
-    results: list[tuple[float, dict[str, Any]]] = []
-    for row in rows:
-        node_id, name, node_type, file_path, vec_blob, repo = row
-        vec = _blob_to_vector(vec_blob)
-        score = _cosine_similarity(query_vec, vec)
-        results.append((score, {
-            "id": node_id,
-            "name": name,
-            "type": node_type,
-            "file_path": file_path,
-            "repo_name": repo,
-            "similarity": round(score, 4),
-        }))
-
-    conn.close()
-
-    results.sort(key=lambda x: -x[0])
-    return [r[1] for r in results[:limit]]
+    results: list[dict[str, Any]] = []
+    for idx in top_order:
+        rec = dict(records[idx])
+        rec["similarity"] = round(float(scores[idx]), 4)
+        rec["repo_name"] = repo_name or ""
+        results.append(rec)
+    return results
 
 
 def find_similar(
@@ -176,41 +181,24 @@ def find_similar(
         conn.close()
         return []
 
-    target_vec = _blob_to_vector(row[0])
-
-    target_repo = conn.execute(
-        """SELECT r.name FROM nodes n
-           JOIN repositories r ON n.repository_id = r.id
-           WHERE n.id = ?""",
-        (node_id,),
-    ).fetchone()
-
-    repo_name = target_repo[0] if target_repo else None
-
-    rows = conn.execute(
-        """SELECT n.id, n.name, n.node_type, n.file_path, emb.vector
-            FROM embeddings emb
-            JOIN nodes n ON emb.node_id = n.id
-            WHERE emb.model = ? AND n.id != ?
-         """,
-        (EMBEDDING_MODEL, node_id),
-    ).fetchall()
-
-    results: list[tuple[float, dict[str, Any]]] = []
-    for row in rows:
-        nid, name, node_type, file_path, vec_blob = row
-        vec = _blob_to_vector(vec_blob)
-        score = _cosine_similarity(target_vec, vec)
-        results.append((score, {
-            "id": nid,
-            "name": name,
-            "type": node_type,
-            "file_path": file_path,
-            "repo_name": repo_name,
-            "similarity": round(score, 4),
-        }))
-
+    target_vec = np.frombuffer(row[0], dtype=np.float32)
     conn.close()
 
-    results.sort(key=lambda x: -x[0])
-    return [r[1] for r in results[:limit]]
+    vectors, records = _load_vectors(db_path, exclude_id=node_id)
+    if len(vectors) == 0:
+        return []
+
+    norms = np.linalg.norm(vectors, axis=1)
+    dot = vectors @ target_vec
+    scores = dot / (norms * np.linalg.norm(target_vec))
+
+    top_k = min(limit, len(scores))
+    top_indices = np.argpartition(-scores, top_k)[:top_k]
+    top_order = top_indices[np.argsort(-scores[top_indices])]
+
+    results: list[dict[str, Any]] = []
+    for idx in top_order:
+        rec = dict(records[idx])
+        rec["similarity"] = round(float(scores[idx]), 4)
+        results.append(rec)
+    return results
