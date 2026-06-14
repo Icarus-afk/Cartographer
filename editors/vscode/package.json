@@ -7,7 +7,7 @@
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages", "Visualization", "Other"],
-  "icon": "resources/icon.png",
+  "repository": { "type": "git", "url": "https://github.com/anomalyco/cartographer" },
   "activationEvents": [
     "onStartupFinished"
   ],
