@@ -1,6 +1,8 @@
 # Troubleshooting
 
-Common issues and solutions when using Cartographer.
+Common issues when using Cartographer and how to fix them.
+
+---
 
 ## Installation
 
@@ -19,7 +21,7 @@ python -m cartographer version
 
 ### `ModuleNotFoundError: No module named 'tree_sitter'`
 
-Tree-sitter is installed as a dependency, but the pip package name may differ:
+Tree-sitter is installed as a dependency, but the pip package name may differ on your system:
 
 ```bash
 pip install tree-sitter>=0.23,<1.0
@@ -37,6 +39,8 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+---
+
 ## Indexing
 
 ### `No module named 'tree_sitter_LANGUAGE'`
@@ -48,19 +52,20 @@ pip install tree-sitter-python tree-sitter-go tree-sitter-rust
 # ... repeat for each language you need
 ```
 
-Alternatively, the parser registry should auto-download the grammar. If it doesn't, install it manually.
+The parser registry should auto-download grammars on demand. If it doesn't, installing manually fixes it.
 
 ### Slow indexing on large repositories
 
 Cartographer indexes all source files sequentially. For repos with 10,000+ files:
 
-- Indexing is I/O bound — an SSD helps significantly
+- Indexing is **I/O bound** — an SSD helps significantly
 - Watch for repositories that include generated files or vendored dependencies
+- Consider adding patterns to `.cartographerignore` for directories you want to skip
 - Indexing time is proportional to total entity count rather than file count
 
-### `Warning: Failed to parse file X` 
+### `Warning: Failed to parse file X`
 
-This is normal — some files may use syntax features not yet supported by the Tree-sitter grammar. Parse errors are treated as warnings, not fatal. The rest of the repository is still indexed.
+This is normal — some files may use syntax features not yet supported by the Tree-sitter grammar (e.g., very new language features, or unusual syntax). Parse errors are treated as warnings, not fatal. The rest of the repository is still indexed successfully.
 
 ### No entities found for a file
 
@@ -68,7 +73,7 @@ If a file is counted in "X files indexed" but shows 0 entities:
 
 1. The language might not be supported (check the languages list in the output)
 2. The file might be empty or contain only comments
-3. The Tree-sitter grammar might have parsing issues
+3. The Tree-sitter grammar might have parsing issues for that specific file
 
 ### `Fatal: No parsers available`
 
@@ -79,6 +84,22 @@ python -c "from tree_sitter import Language; print('tree-sitter OK')"
 python -c "import tree_sitter_python as tsp; lang = tsp.language(); print('Python parser OK')"
 ```
 
+### Files I don't want are being indexed
+
+Use `.cartographerignore` in the repo root to skip specific files or directories:
+
+```
+# .cartographerignore
+test/repos/*
+vendor/*
+*.pyc
+build/
+```
+
+You can also use `.gitignore` — Cartographer respects root `.gitignore` patterns automatically.
+
+---
+
 ## Search and Queries
 
 ### `No results found` even though the symbol exists
@@ -86,7 +107,7 @@ python -c "import tree_sitter_python as tsp; lang = tsp.language(); print('Pytho
 1. Check the database path: `cartographer --db /path/to/db ask "symbol"`
 2. Make sure the repository was indexed: `cartographer summarize`
 3. Try a partial match: `cartographer ask "part_of_name"`
-4. Check the file was parsed: look at the indexing output
+4. Check the file was parsed by looking at the indexing output
 
 ### Semantic search returns no results
 
@@ -97,15 +118,21 @@ cartographer embed
 # If that returns 0, the model needs to download
 # First run downloads ~33MB model
 # Check network connectivity if it hangs
+
+# You can set a HuggingFace token if needed
+export HF_TOKEN=your_token_here
 ```
 
 ### Query planner gives wrong intent
 
-If `cartographer query "something"` runs the wrong strategy:
+If `cartographer query "something"` runs the wrong analysis strategy:
 
 - Be more specific: use "architecture" instead of "what is the architecture"
 - Use the explicit command: `cartographer architecture --detect` instead of `query`
+- Use verbose mode to see what intent was detected: `cartographer query -v "your question"`
 - The intent detection is keyword-based — overly vague queries fall back to plain search
+
+---
 
 ## Architecture Detection
 
@@ -132,7 +159,9 @@ A framework might be falsely detected if:
 - A config file like `requirements.txt` mentions it but it's not actually used
 - Directory names incidentally match (e.g., a `routes/` directory that's not Express)
 
-Lower confidence thresholds in the detection rules or file-level evidence vs. framework patterns.
+This is by design — the system favors false positives over false negatives. You can check confidence scores to gauge reliability.
+
+---
 
 ## Git Commands
 
@@ -144,14 +173,14 @@ The default 60-second timeout for `git log` may not be enough for repos with 10,
 # Index only the most recent commits
 cartographer git index -n 1000
 
-# Or use a shorter time range (git log already does this internally)
+# Or use a smaller time range
 ```
 
 ### `No history found` even after `git index`
 
 1. Make sure the correct repo path was used: `cartographer git index -p /path/to/repo`
-2. Verify commits were indexed: the output shows how many commits and authors
-3. Check the symbol exists: `cartographer ask "symbol"`
+2. Verify commits were indexed (the output shows how many commits and authors)
+3. Check the symbol exists in the graph: `cartographer ask "symbol"`
 
 ### `failed to run git` errors
 
@@ -161,6 +190,8 @@ Cartographer needs `git` available on the PATH. Verify:
 which git
 git --version
 ```
+
+---
 
 ## Database
 
@@ -180,7 +211,7 @@ export CARTOGRAPHER_DB=/path/to/your/index.db
 
 ### Corrupted database
 
-If you see `sqlite3.DatabaseError` or `database disk image is malformed`:
+If you see `sqlite3.DatabaseError` or "database disk image is malformed":
 
 ```bash
 # Delete and re-index
@@ -190,23 +221,28 @@ cartographer index /path/to/repo
 
 ### Database size
 
-The database size depends on entity count. Rough estimate: ~1KB per entity (node + edges + metadata). Embeddings add ~1.5KB per entity (384 floats × 4 bytes).
+The database size depends on entity count. Rough estimate:
+- ~310 bytes per node (node + edges + metadata)
+- Embeddings add ~1.5KB per entity (384 floats × 4 bytes)
 
 To reduce size:
-
-- Exclude vendored or generated directories from indexing
+- Exclude vendored or generated directories from indexing (use `.cartographerignore`)
 - Only embed the entity types you need (class, function, method, file, interface, enum)
+
+---
 
 ## Embeddings
 
 ### Model download hangs
 
-The `BAAI/bge-small-en-v1.5` model is downloaded from HuggingFace on first use:
+The `BAAI/bge-small-en-v1.5` model is downloaded from HuggingFace on first use (~33MB):
 
 ```bash
 # Set a HuggingFace token for authenticated downloads
 export HF_TOKEN=your_token_here
 ```
+
+If downloads are slow, check your network connection. The model only downloads once and is cached.
 
 ### Out of memory
 
@@ -220,6 +256,8 @@ The `bge-small-en-v1.5` model is a lightweight general-purpose embedding model. 
 - Using more specific search terms
 - Combining semantic search with text search for better precision
 
+---
+
 ## OpenCode Integration
 
 ### Tool not found by OpenCode
@@ -227,6 +265,14 @@ The `bge-small-en-v1.5` model is a lightweight general-purpose embedding model. 
 1. Check the tool configuration syntax in `opencode.json` or `~/.config/opencode/config.jsonc`
 2. Verify the `cartographer` command works standalone
 3. Check that the `args` parameter matches how OpenCode passes arguments
+
+### MCP Server not connecting
+
+If using the MCP server (`cartographer mcp`):
+
+1. Make sure the server starts without errors
+2. Check that your AI assistant is configured to connect to a local MCP server
+3. Verify the `cartographer-mcp` command is on your PATH
 
 ### Output too long for LLM context
 

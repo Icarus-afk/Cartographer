@@ -2,6 +2,8 @@
 
 Cartographer is designed to work as a knowledge-graph provider for AI coding assistants like OpenCode. This guide covers integration patterns, agent configuration, and best practices.
 
+---
+
 ## Quick Setup
 
 ### 1. Configure OpenCode tools
@@ -73,12 +75,38 @@ cartographer --db /path/to/index.db embed
 cd /path/to/repo && cartographer --db /path/to/index.db git index
 ```
 
+### Alternative: Use the MCP Server
+
+Instead of configuring individual tools, you can run the MCP server directly. Cartographer supports the Model Context Protocol (MCP), which lets AI assistants discover and call tools automatically:
+
+```bash
+cartographer mcp
+```
+
+Configure your assistant to connect to the MCP server:
+
+**Claude Desktop / Cursor / OpenCode:**
+```json
+{
+  "mcpServers": {
+    "cartographer": {
+      "command": "cartographer-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+The MCP server exposes 8 tools and 3 resources. Tools include `search`, `impact`, `neighbors`, `path`, `summarize`, `architecture`, `similar`, and `ask`. Resources include `cartographer://repos`, `cartographer://repo/{name}`, and `cartographer://node/{node_id}`.
+
+---
+
 ## Agent Integration Pattern
 
 ### Tool Selection Guide
 
 | Agent Task | Best Tool | Why |
-|------------|-----------|-----|
+|---|---|---|
 | "What is this project?" | `cartographer-summarize` | High-level overview |
 | "Explain the architecture" | `cartographer-architecture` | Layer + pattern detection |
 | "How does X work?" | `cartographer-query "explain X"` | Combines search + impact |
@@ -93,7 +121,7 @@ cd /path/to/repo && cartographer --db /path/to/index.db git index
 When you use `cartographer query`, it automatically detects intent:
 
 | Query Pattern | Intent | Example |
-|---------------|--------|---------|
+|---|---|---|
 | "what is the architecture" | architecture | returns layers + patterns + frameworks |
 | "explain X" | explain | returns nodes + dependents |
 | "what depends on X" | impact | returns grouped dependents |
@@ -115,11 +143,12 @@ cartographer ask -m 100 "UserService"
 ```
 
 Compression strategies:
-
 - **Nodes** (ask, search): groups by type when >10 results, shows counts + top files
 - **Impact**: groups by edge type, shows top N per group
 - **Path**: maintains structure, truncates from end
 - **Summary**: condenses to top types/files, truncates lists
+
+---
 
 ## Workflow: Onboarding to a New Repository
 
@@ -164,6 +193,8 @@ Agent → cartographer-git-blame "config.py"
 → "Modified by Jane Doe, last change: 'Add database config' (2024-03-15)"
 ```
 
+---
+
 ## Advanced Configuration
 
 ### Multiple Database Support
@@ -202,6 +233,8 @@ cartographer --db "$DB_PATH" index "$REPO_PATH"
 cartographer --db "$DB_PATH" embed
 echo "Done. Updated knowledge graph at $DB_PATH"
 ```
+
+---
 
 ## Troubleshooting
 
