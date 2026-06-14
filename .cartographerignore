@@ -1,0 +1,2 @@
+# Cartographer ignore file: patterns here are skipped during indexing
+test/repos/*
