@@ -25,7 +25,7 @@
 | Ruby | rspec-core | 223 | Test framework |
 | Scala | cats | 836 | Functional programming |
 | Python | Cartographer (self) | 45 | Self-test |
-| TypeScript/TSX | ngaze | 1,633 | Large TS codebase |
+| TypeScript/TSX | typescript-project | 1,633 | TypeScript codebase (generic) |
 
 ---
 
@@ -47,9 +47,9 @@
 | monolog | 216 | 857 | 252.0 | 1,820 | 2,124 | 1,827 | 10 |
 | rspec-core | 223 | 920 | 242.4 | 311 | 338 | 428 | 124 |
 | cats | 836 | 6,383 | 131.0 | 9,204 | 1,442 | 9,884 | 708 |
-| Cartographer (self) | 45 | 91 | 494.5 | 370 | 4,066 | 499 | — |
-| ngaze | 1,633 | 4,400 | 371.1 | 10,662 | 2,423 | 11,452 | — |
-| **Total/Average** | **4,577** | **52,917** | **86.5 avg** | **37,424** | **707 avg** | **46,770** | **9,532** |
+| Cartographer (self) | 47 | 85 | 553.0 | 463 | 5,447 | 1,139 | — |
+| typescript-project | 1,633 | 4,400 | 371.1 | 10,662 | 2,423 | 11,452 | — |
+| **Total/Average** | **4,579** | **52,911** | **86.5 avg** | **37,517** | **709 avg** | **47,410** | **9,532** |
 
 ### 2.2 Real-Time Performance Estimates
 
@@ -57,7 +57,7 @@ For a typical project mix (500–1,000 files across Python/Go/Rust/Java):
 - 500 files: ~6 seconds
 - 1,000 files: ~12 seconds
 - 2,000 files (junit5 scale): ~32 seconds
-- 1,600 files TS/TSX (ngaze scale): ~4.4 seconds (fast due to JS parser efficiency)
+- 1,600 files TS/TSX (typescript-project): ~4.4 seconds (fast due to JS parser efficiency)
 
 ### 2.3 Per-Language Throughput
 
@@ -173,8 +173,8 @@ The new numpy-batched implementation shows drastic improvement:
 
 | Dataset | Vectors | Old (Python loop) | New (numpy batch) | Speedup |
 |---|---|---|---|---|
-| Cartographer (self) | 409 | ~165ms | ~1ms | **165x** |
-| ngaze | 8,954 | ~3,600ms | ~13ms | **277x** |
+| Cartographer (self) | 463 | ~185ms | ~1ms | **185x** |
+| typescript-project | 8,954 | ~3,600ms | ~13ms | **277x** |
 | cats | 9,204 | ~3,700ms | ~13ms | **285x** |
 
 The vectorized approach loads all vectors into one `(N, 384)` numpy array and computes cosine similarity in a single operation.

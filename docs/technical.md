@@ -63,7 +63,7 @@ Cartographer has been tested against **14 real-world repositories** across 12 la
 | monolog | PHP | 216 | 857ms | 1,820 | 1,827 |
 | rspec-core | Ruby | 223 | 920ms | 311 | 428 |
 | cats | Scala | 836 | 6,383ms | 9,204 | 9,884 |
-| ngaze | TS/TSX | 1,633 | 4,400ms | 10,662 | 11,452 |
+| typescript-project | TS/TSX | 1,633 | 4,400ms | 10,662 | 11,452 |
 
 ---
 
@@ -590,7 +590,7 @@ top_order = top_indices[np.argsort(-scores[top_indices])]
 |---|---|---|---|
 | 5,000 vectors × 1 query | 2,025ms | 7ms | **280x** |
 
-Measured at ~120–150 vec/s for embedding generation on ngaze corpus (8,954 nodes).
+Measured at ~120–150 vec/s for embedding generation on a TypeScript corpus (8,954 nodes).
 
 ### Find Similar (`find_similar`)
 
@@ -1013,14 +1013,14 @@ make install-dev   # editable install
 | junit5 (Java) | 1,911 | 31,935ms | 60 f/s |
 | Cartographer (self) | 47 | 85ms | 553 f/s |
 | cats (Scala) | 836 | 6,383ms | 131 f/s |
-| ngaze (TS/TSX) | 1,633 | 4,400ms | 371 f/s |
+| typescript-project (TS/TSX) | 1,633 | 4,400ms | 371 f/s |
 
 ### Embedding Performance
 
 | Dataset | Nodes | Time | Speed |
 |---|---|---|---|
 | Cartographer (self) | 463 | ~2s | 231 vec/s |
-| ngaze | 8,954 | ~73s | 121 vec/s |
+| typescript-project | 8,954 | ~73s | 121 vec/s |
 
 ### Embedding Search (5,000 vectors)
 
@@ -1040,7 +1040,7 @@ Cartographer is successful if:
 - **Accurate dependency analysis** — Correct transitive impact identification via graph traversal
 - **Accurate architecture detection** — Clean Architecture at 84% confidence, Service-Oriented at 99%
 - **Sub-second graph queries** — All retrieval operations complete in <100ms for repos up to 10K nodes
-- **Million-line repository support** — ngaze (1,633 files, ~500K LOC) indexed in 4.4 seconds
+- **Million-line repository support** — typescript-project (1,633 files, ~500K LOC) indexed in 4.4 seconds
 
 ---
 
