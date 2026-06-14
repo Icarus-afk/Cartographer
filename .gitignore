@@ -41,3 +41,4 @@ vendor/
 .mypy_cache/
 .pytest_cache/
 .coverage
+opencode.json
