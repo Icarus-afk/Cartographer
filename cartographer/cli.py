@@ -5,7 +5,7 @@ from pathlib import Path
 import click
 
 from cartographer.architecture.engine import detect_architecture, get_architecture
-from cartographer.compression.engine import compress
+from cartographer.compression.engine import build_context_package, compress
 from cartographer.core.models import EntityKind
 from cartographer.embedding.engine import find_similar, generate_embeddings, similarity_search
 from cartographer.git.engine import (
@@ -254,6 +254,38 @@ def summarize(ctx, repo, max_tokens):
 
 
 @main.command()
+@click.option("--repo", "-r", help="Repository name")
+@click.option("--max-tokens", "-m", default=1500, type=int, help="Token budget")
+@click.option("--top-n", default=10, type=int, help="Number of key nodes to include")
+@click.pass_context
+def context(ctx, repo, max_tokens, top_n):
+    """Generate a structured context package (graph + architecture + key nodes)."""
+    summary = generate_summary(ctx.obj["db_path"], repo)
+    if not summary:
+        click.echo("No repository found. Run 'cartographer index' first.")
+        return
+
+    arch = None
+    try:
+        arch = get_architecture(ctx.obj["db_path"], repo)
+        if "error" in arch:
+            arch = None
+    except Exception:
+        pass
+
+    top_nodes = None
+    try:
+        results = search_nodes("", ctx.obj["db_path"], repo, limit=top_n)
+        if results:
+            top_nodes = results
+    except Exception:
+        pass
+
+    result = build_context_package(summary, arch, top_nodes, max_tokens)
+    click.echo(result)
+
+
+@main.command()
 @click.argument("from_name")
 @click.argument("to_name")
 @click.option("--max-depth", default=5)
@@ -390,6 +422,14 @@ def architecture(ctx, repo, detect, verbose):
                     label = "observed"
                 click.echo(f"  {df['direction']} ({df['forward']}f/{df['reverse']}r) [{label}]")
                 click.echo(f"    {df['description']}")
+            click.echo()
+
+        if result.get("domains"):
+            click.echo("Service domains:")
+            for d in result["domains"]:
+                pct = round(d["confidence"] * 100)
+                click.echo(f"  {d['name']} ({pct}% confidence, {d['file_count']} files)")
+                click.echo(f"    layers: {', '.join(f'{k}: {v}' for k, v in d.get('layer_counts', {}).items())}")
             click.echo()
 
         if not result["layers"] and not result["patterns"]:

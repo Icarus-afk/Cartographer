@@ -491,6 +491,8 @@ def _analyze(
     architecture["patterns"] = _detect_patterns(resolved, fw_names)
     architecture["framework_patterns"] = _detect_framework_patterns(resolved, fw_names)
 
+    architecture["domains"] = _detect_domains(conn, repo_id, resolved)
+
     _persist_architecture(conn, repo_id, resolved,
                           architecture["patterns"], architecture["framework_patterns"])
     return architecture
@@ -799,6 +801,123 @@ def _detect_framework_patterns(
     return patterns
 
 
+def _detect_domains(
+    conn: sqlite3.Connection,
+    repo_id: int,
+    resolved: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT n.name, n.file_path, n.node_type FROM nodes n
+           WHERE n.repository_id = ?
+           AND n.node_type IN ('file', 'directory')""",
+        (repo_id,),
+    ).fetchall()
+
+    dir_children: dict[str, list[dict[str, Any]]] = {}
+    file_entity_counts: dict[str, dict[str, int]] = {}
+    for name, fpath, ntype in rows:
+        if ntype == "file":
+            parent = str(Path(fpath).parent)
+            dir_children.setdefault(parent, []).append({"type": "file", "name": name, "path": fpath})
+        elif ntype == "directory":
+            parent = str(Path(fpath).parent) if fpath and fpath != "." else ""
+            dir_children.setdefault(parent, []).append({"type": "dir", "name": name, "path": fpath})
+
+    top_level: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in dir_children.get("", []):
+        if entry["type"] == "dir":
+            path = entry["path"]
+            if path not in seen:
+                seen.add(path)
+                top_level.append(entry)
+
+    domains: list[dict[str, Any]] = []
+    for d in top_level:
+        domain_name = d["name"]
+        if domain_name.startswith(".") or domain_name in (
+            "node_modules", "venv", ".git", "__pycache__", "dist", "build",
+            "vendor", ".tox", ".eggs", "env",
+        ):
+            continue
+        sub_items = dir_children.get(d["path"], [])
+        sub_dirs = [s for s in sub_items if s["type"] == "dir"]
+        sub_files = [s for s in sub_items if s["type"] == "file"]
+        all_files: list[str] = []
+        q: list[str] = [s["path"] for s in sub_dirs]
+        all_files.extend(s["path"] for s in sub_files)
+        while q:
+            cur = q.pop()
+            for item in dir_children.get(cur, []):
+                if item["type"] == "dir":
+                    q.append(item["path"])
+                else:
+                    all_files.append(item["path"])
+
+        if len(all_files) < 2:
+            continue
+
+        file_count = len(all_files)
+        layer_counts: dict[str, int] = {}
+        entity_type_counts: dict[str, int] = {}
+        for fpath in all_files:
+            fname = Path(fpath).name
+            fl = _file_layer_for_domain(fname, resolved)
+            if fl:
+                layer_counts[fl] = layer_counts.get(fl, 0) + 1
+            result = conn.execute(
+                """SELECT node_type FROM nodes n
+                   WHERE n.repository_id = ? AND n.file_path = ?""",
+                (repo_id, fpath),
+            ).fetchall()
+            for (nt,) in result:
+                entity_type_counts[nt] = entity_type_counts.get(nt, 0) + 1
+
+        controllers = layer_counts.get("controller", 0)
+        business = layer_counts.get("business", 0)
+        data = layer_counts.get("data", 0)
+        is_service_boundary = (controllers + business + data) >= 2
+        coverage = (controllers + business + data) / max(file_count, 1)
+        domain_type = "service"
+        if coverage >= 0.3:
+            domain_type = "service"
+        elif controllers > 0:
+            domain_type = "unknown"
+
+        max_type = max(entity_type_counts.values()) if entity_type_counts else 0
+        diversity = len(entity_type_counts)
+        confidence = min(0.3 + coverage * 0.4 + (diversity / 5) * 0.3, 1.0)
+
+        if is_service_boundary or confidence >= 0.4:
+            domains.append({
+                "name": domain_name,
+                "type": domain_type,
+                "confidence": round(confidence, 2),
+                "file_count": file_count,
+                "layer_counts": layer_counts,
+                "entity_type_counts": entity_type_counts,
+            })
+
+    conn.execute("DELETE FROM architecture WHERE repository_id = ? AND layer = 'domain'", (repo_id,))
+    rows = [(repo_id, "domain", d["name"], json.dumps(d)) for d in domains]
+    if rows:
+        conn.executemany(
+            "INSERT INTO architecture (repository_id, layer, pattern, description) VALUES (?, ?, ?, ?)",
+            rows,
+        )
+    conn.commit()
+    return domains
+
+
+@functools.lru_cache(maxsize=2048)
+def _file_layer_for_domain(fname: str, resolved: dict[str, dict[str, Any]]) -> str | None:
+    hits = _score_file_name(fname, FILE_NAME_RULES)
+    for layer, weight, _reason in hits:
+        if layer in resolved and weight >= 0.5:
+            return layer
+    return None
+
+
 def _persist_architecture(
     conn: sqlite3.Connection,
     repo_id: int,
@@ -856,8 +975,14 @@ def get_architecture(
     layers: list[dict[str, str]] = []
     patterns: list[dict[str, str]] = []
     framework_patterns: list[dict[str, str]] = []
+    domains: list[dict[str, Any]] = []
     for layer, pattern, description in rows:
-        if layer == "pattern":
+        if layer == "domain":
+            try:
+                domains.append(json.loads(description))
+            except (json.JSONDecodeError, TypeError):
+                pass
+        elif layer == "pattern":
             patterns.append({"name": pattern, "description": description})
         elif layer == "framework_pattern":
             framework_patterns.append({"name": pattern, "description": description})
@@ -870,4 +995,5 @@ def get_architecture(
         "layers": layers,
         "patterns": patterns,
         "framework_patterns": framework_patterns,
+        "domains": domains,
     }

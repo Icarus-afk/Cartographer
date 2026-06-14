@@ -14,6 +14,7 @@ from cartographer.ingestion.discoverer import (
 )
 from cartographer.ingestion.fingerprint import fingerprint_frameworks
 from cartographer.ingestion.references import extract_references
+from cartographer.ingestion.schema import extract_schema
 from cartographer.parser.registry import get_parser, supported_languages
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,12 @@ def index_repository(
                 references = extract_references(root, parsed_files, files)
             except Exception as e:
                 errors.append(f"Reference extraction failed: {e}")
+
+        if parsed_files:
+            try:
+                extract_schema(parsed_files, files, root)
+            except Exception as e:
+                errors.append(f"Schema extraction failed: {e}")
 
         if db_path is None:
             db_path_obj = Path.home() / ".cartographer" / "index.db"

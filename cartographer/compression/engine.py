@@ -145,6 +145,80 @@ def compress_summary(
     return _truncate_lines(parts, max_tokens, "  ...")
 
 
+def compress_architecture(
+    arch: dict[str, Any],
+    max_tokens: int = 500,
+) -> str:
+    if not arch:
+        return "No architecture data available."
+
+    parts: list[str] = [
+        f"Architecture: {arch.get('repository', '?')}",
+    ]
+    if "error" in arch:
+        parts.append(f"  Error: {arch['error']}")
+        return "\n".join(parts)
+
+    layers = arch.get("layers", {})
+    if layers:
+        parts.append("  Layers:")
+        for lname, info in layers.items():
+            desc = info.get("description", lname)
+            conf = info.get("confidence", 0)
+            count = info.get("entity_count", 0)
+            parts.append(f"    {desc} (confidence={conf}, entities={count})")
+
+    patterns = arch.get("patterns", [])
+    if patterns:
+        parts.append("  Patterns:")
+        for p in patterns[:4]:
+            parts.append(f"    {p['name']} (confidence={p['confidence']})")
+
+    domains = arch.get("domains", [])
+    if domains:
+        parts.append("  Domains:")
+        for d in domains[:5]:
+            cnf = d['confidence']
+            parts.append(f"    {d['name']} (type={d['type']}, conf={cnf}, files={d['file_count']})")
+
+    return _truncate_lines(parts, max_tokens, "  ...")
+
+
+def build_context_package(
+    summary: dict[str, Any],
+    architecture: dict[str, Any] | None = None,
+    top_nodes: list[dict[str, Any]] | None = None,
+    max_tokens: int = 1500,
+) -> str:
+    if not summary:
+        return "No data available."
+
+    token_budget = max_tokens
+    sections: list[str] = []
+    current_tokens = 0
+
+    section1 = compress_summary(summary, max_tokens // 3)
+    sections.append("## Graph Summary\n" + section1)
+    current_tokens += estimate_tokens(section1)
+
+    if architecture and current_tokens < token_budget:
+        remaining = token_budget - current_tokens
+        section2 = compress_architecture(architecture, max(remaining, 50))
+        sections.append("## Architecture\n" + section2)
+        current_tokens += estimate_tokens(section2)
+
+    if top_nodes and current_tokens < token_budget:
+        remaining = token_budget - current_tokens
+        section3 = compress_nodes(top_nodes, max(remaining, 50))
+        sections.append("## Key Nodes\n" + section3)
+        current_tokens += estimate_tokens(section3)
+
+    result = "\n\n".join(sections)
+    if estimate_tokens(result) > max_tokens:
+        return _truncate_lines(sections, max_tokens, "\n...")
+    return result
+
+
 def compress(
     data: Any,
     max_tokens: int = 500,

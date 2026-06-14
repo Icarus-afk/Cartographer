@@ -230,6 +230,19 @@ Maps file extensions to `Language` enum (20 extensions across 19 languages + TSX
 
 Detects pnpm, lerna, nx, rush, turbo, and npm-workspaces by checking for workspace configuration files.
 
+### Schema Extraction (`schema.py`)
+
+Detects database schema entities (TABLE, COLUMN) from ORM models and SQL files:
+
+| Source | Detection Strategy |
+|---|---|
+| Django models | Class inheriting `models.Model` with field types (CharField, etc.) |
+| JPA entities | `@Entity` annotation with `@Table` metadata |
+| Prisma schema | `model ModelName { ... }` blocks in `schema.prisma` |
+| SQL files | `CREATE TABLE` statements with column definitions |
+
+Schema entities are added as children of their model classes (Django/JPA) or as standalone TABLE entities (Prisma/SQL). Each table entity includes column metadata (name, type) as child CONSTANT entities.
+
 ### Reference Extraction (`references.py`)
 
 Cross-file import resolution for 19 languages. Uses regex patterns to extract import statements, then resolves candidates via a precomputed suffix index (`_build_suffix_index`) with O(1) dict lookups instead of O(n×m) linear `endswith` scans across all candidate files. Includes case-insensitive fallback.
@@ -640,6 +653,21 @@ Multi-strategy detection combining:
 | Gin | `gin.Context`, router groups |
 | NestJS | `@Module`, `@Controller`, `@Injectable` |
 
+### Service Domain Detection
+
+Automatically decomposes the repository into service domains by analyzing top-level directories:
+
+1. Walks each top-level directory and its subdirectories
+2. Counts layer-specific files (controllers, business, data) within each directory tree
+3. Assigns confidence based on file diversity and layer coverage
+4. Drops directories with <2 files or common non-domain names (node_modules, venv, etc.)
+
+Domains are persisted to the `architecture` table (layer='domain') and returned with:
+- `name` — directory name
+- `file_count` — total files in domain
+- `layer_counts` — breakdown of controller/business/data files
+- `confidence` — 0.0–1.0 score based on coverage and diversity
+
 ### Confidence Scoring
 
 Each detection produces a confidence score (0.0–1.0) based on:
@@ -725,6 +753,20 @@ Reduce the token count of graph context before presenting to LLMs. Target: 80–
 | `impact` | Prune irrelevant edges, keep impact chain | ~85% |
 | `path` | Keep only the shortest path between nodes | ~95% |
 | `summary` | Keep only aggregate stats and architecture | ~95% |
+
+### Context Package (`build_context_package()`)
+
+Combines multiple compression strategies into a structured context for LLM consumption:
+
+1. **Graph Summary** — repo name, node/edge counts, breakdowns, top files/classes
+2. **Architecture** — detected layers, patterns, service domains
+3. **Key Nodes** — top-N search results sorted by relevance
+
+Token budget is distributed across sections (default 1500 tokens total). Each section independently truncates to its allocation.
+
+### Architecture Compression (`compress_architecture()`)
+
+Formats architecture detection results (layers, patterns, domains) into concise LLM-readable text.
 
 ### Auto-Dispatch (`compress()`)
 
@@ -835,7 +877,7 @@ Configure Claude Desktop, Cursor, or OpenCode to connect:
 
 **Location:** `cartographer/cli.py`
 
-### Commands (16 total)
+### Commands (17 total)
 
 | Command | Description | Options |
 |---|---|---|
@@ -848,6 +890,7 @@ Configure Claude Desktop, Cursor, or OpenCode to connect:
 | `cartographer summarize` | Repo summary | `--repo`, `--max-tokens` |
 | `cartographer embed` | Generate embeddings | `--repo` |
 | `cartographer similar TARGET` | Semantic similarity | `--repo`, `--limit` |
+| `cartographer context` | Context package (summary + architecture + key nodes) | `--repo`, `--max-tokens`, `--top-n` |
 | `cartographer architecture` | Architecture | `--detect`, `--repo`, `--verbose` |
 | `cartographer mcp` | Run MCP server | `--db` |
 | `cartographer version` | Show version | (none) |
@@ -893,6 +936,8 @@ Semantic: SIMILAR_TO, RELATED_TO, DUPLICATES, PATTERN_MATCH
 **Implemented (extracted at parse/build time):** CONTAINS, DEFINES, DECLARES, IMPORTS, **CALLS** (same-file function calls via tree-sitter AST walk), **INHERITS** (class base/superclass extraction), **IMPLEMENTS** (Java `implements`, Rust `impl Trait for Type`).
 
 **Entity Reclassification:** At build time, CLASS entities with naming suffixes are promoted to more specific types: `*Controller` → CONTROLLER, `*Service` → SERVICE, `*Middleware` → MIDDLEWARE, `*Repository`/`*Repo`/`*DAO` → REPOSITORY_LAYER, `*Job` → JOB, `*Worker` → WORKER, `*Queue` → QUEUE.
+
+**Schema Extraction:** TABLE entities are detected from Django models (class extending `models.Model`), JPA entities (`@Entity`), Prisma schemas (`schema.prisma`), and `.sql` files (`CREATE TABLE`). Each TABLE entity includes column child entities with metadata about field types.
 
 ---
 
