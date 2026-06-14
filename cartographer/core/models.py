@@ -106,6 +106,7 @@ class EntityKind(str, Enum):
     FUNCTION = "function"
     METHOD = "method"
     INTERFACE = "interface"
+    TYPE_ALIAS = "type_alias"
     ENUM = "enum"
     CONSTANT = "constant"
     VARIABLE = "variable"

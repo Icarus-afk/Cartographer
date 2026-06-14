@@ -23,7 +23,9 @@ class JavaScriptParser(BaseParser):
         return entities
 
     def _parse_node(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
-        if node.type == "function_declaration":
+        if node.type in ("function_declaration", "function_expression"):
+            return self._extract_function(node, source, file_path)
+        if node.type == "generator_function_declaration":
             return self._extract_function(node, source, file_path)
         if node.type == "class_declaration":
             return self._extract_class(node, source, file_path)
@@ -39,9 +41,7 @@ class JavaScriptParser(BaseParser):
 
     def _extract_function(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
         name_node = node.child_by_field_name("name")
-        if not name_node:
-            return None
-        name = self._node_text(name_node, source)
+        name = self._node_text(name_node, source) if name_node else "anonymous"
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
         return ParsedEntity(
@@ -102,30 +102,42 @@ class JavaScriptParser(BaseParser):
     def _extract_variable_declaration(
         self, node: Node, source: bytes, file_path: str
     ) -> ParsedEntity | None:
-        entities: list[ParsedEntity] = []
         for child in node.children:
             if child.type == "variable_declarator":
-                name_node = child.child_by_field_name("name")
-                if name_node:
-                    entities.append(self._make_variable(name_node, source, file_path))
-        return entities[0] if entities else None
+                entity = self._from_declarator(child, source, file_path)
+                if entity:
+                    return entity
+        return None
 
     def _extract_lexical_declaration(
         self, node: Node, source: bytes, file_path: str
     ) -> ParsedEntity | None:
         for child in node.children:
             if child.type == "variable_declarator":
-                name_node = child.child_by_field_name("name")
-                if name_node:
-                    return self._make_variable(name_node, source, file_path)
+                entity = self._from_declarator(child, source, file_path)
+                if entity:
+                    return entity
         return None
 
-    def _make_variable(self, name_node: Node, source: bytes, file_path: str) -> ParsedEntity:
+    def _from_declarator(
+        self, node: Node, source: bytes, file_path: str
+    ) -> ParsedEntity | None:
+        name_node = node.child_by_field_name("name")
+        if not name_node:
+            return None
         name = self._node_text(name_node, source)
+        value_node = node.child_by_field_name("value")
+        kind: EntityKind = EntityKind.CONSTANT
+        if value_node and value_node.type == "arrow_function":
+            kind = EntityKind.FUNCTION
+        elif value_node and value_node.type == "function":
+            kind = EntityKind.FUNCTION
+        elif value_node and value_node.type == "class":
+            kind = EntityKind.CLASS
         loc = self._location_from_node(name_node)
         loc["file_path"] = file_path
         return ParsedEntity(
-            kind=EntityKind.CONSTANT,
+            kind=kind,
             name=name,
             location=CodeLocation(**loc),
         )
@@ -134,5 +146,12 @@ class JavaScriptParser(BaseParser):
         for child in node.children:
             parsed = self._parse_node(child, source, file_path)
             if parsed:
+                if parsed.name == "anonymous":
+                    parsed = ParsedEntity(
+                        kind=parsed.kind,
+                        name="default",
+                        location=parsed.location,
+                        children=parsed.children,
+                    )
                 return parsed
         return None
