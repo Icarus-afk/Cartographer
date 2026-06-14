@@ -1011,7 +1011,7 @@ make install-dev   # editable install
 | rspec-core (Ruby) | 223 | 920ms | 242 f/s |
 | Humanizer (C#) | 469 | 2,732ms | 172 f/s |
 | junit5 (Java) | 1,911 | 31,935ms | 60 f/s |
-| Cartographer (self) | 45 | 91ms | 494 f/s |
+| Cartographer (self) | 47 | 85ms | 553 f/s |
 | cats (Scala) | 836 | 6,383ms | 131 f/s |
 | ngaze (TS/TSX) | 1,633 | 4,400ms | 371 f/s |
 
@@ -1019,7 +1019,7 @@ make install-dev   # editable install
 
 | Dataset | Nodes | Time | Speed |
 |---|---|---|---|
-| Cartographer (self) | 409 | ~2s | 204 vec/s |
+| Cartographer (self) | 463 | ~2s | 231 vec/s |
 | ngaze | 8,954 | ~73s | 121 vec/s |
 
 ### Embedding Search (5,000 vectors)
