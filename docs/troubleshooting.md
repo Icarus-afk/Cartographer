@@ -56,7 +56,7 @@ The parser registry should auto-download grammars on demand. If it doesn't, inst
 
 ### Slow indexing on large repositories
 
-Cartographer indexes all source files sequentially. For repos with 10,000+ files:
+Cartographer parses source files in parallel across CPU cores using `ProcessPoolExecutor`. For repos with 10,000+ files:
 
 - Indexing is **I/O bound** — an SSD helps significantly
 - Watch for repositories that include generated files or vendored dependencies

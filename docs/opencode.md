@@ -91,7 +91,7 @@ Configure your assistant to connect to the MCP server:
   "mcpServers": {
     "cartographer": {
       "command": "cartographer-mcp",
-      "args": []
+      "args": ["--db", "/path/to/custom.db"]
     }
   }
 }

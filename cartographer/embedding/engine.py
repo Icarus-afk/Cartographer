@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from fastembed import TextEmbedding
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 EMBEDDING_DIM = 384
@@ -68,28 +72,25 @@ def generate_embeddings(
         metadata = {}
         if metadata_json:
             try:
-                import json
                 metadata = json.loads(metadata_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.debug("Failed to parse metadata for node %d: %s", node_id, e)
         texts.append(_build_node_text(name, node_type, file_path, metadata))
         node_ids.append(node_id)
 
     vectors = list(tqdm(model.embed(texts), desc="Embedding", total=len(texts), unit="vec"))
 
-    inserted = 0
-    for node_id, vector in tqdm(
-        zip(node_ids, vectors), desc="Saving", total=len(node_ids), unit="vec"
-    ):
-        conn.execute(
-            "INSERT INTO embeddings (node_id, model, vector) VALUES (?, ?, ?)",
-            (node_id, EMBEDDING_MODEL, np.array(vector, dtype=np.float32).tobytes()),
-        )
-        inserted += 1
+    conn.executemany(
+        "INSERT INTO embeddings (node_id, model, vector) VALUES (?, ?, ?)",
+        [
+            (node_id, EMBEDDING_MODEL, np.array(vector, dtype=np.float32).tobytes())
+            for node_id, vector in zip(node_ids, vectors)
+        ],
+    )
 
     conn.commit()
     conn.close()
-    return inserted
+    return len(node_ids)
 
 
 def _load_vectors(

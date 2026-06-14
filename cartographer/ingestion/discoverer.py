@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import fnmatch
+import json
+import logging
 from pathlib import Path
 
 import pathspec
 
 from cartographer.core.models import LANGUAGE_EXTENSIONS, Language
+
+logger = logging.getLogger(__name__)
 
 IGNORED_DIRS = {
     ".git", "__pycache__", "node_modules", ".venv", "venv",
@@ -35,12 +39,12 @@ def _load_ignore_patterns(root: Path) -> list[str]:
     ignore_file = root / CARTOGRAPHER_IGNORE
     if ignore_file.exists():
         try:
-            for line in ignore_file.read_text().splitlines():
+            for line in ignore_file.read_text(errors="replace").splitlines():
                 line = line.strip()
                 if line and not line.startswith("#"):
                     patterns.append(line)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to read %s: %s", ignore_file, e)
     return patterns
 
 
@@ -49,10 +53,10 @@ def _load_gitignore_spec(root: Path) -> pathspec.PathSpec | None:
     if gitignore.exists():
         try:
             return pathspec.PathSpec.from_lines(
-                "gitwildmatch", gitignore.read_text().splitlines()
+                "gitwildmatch", gitignore.read_text(errors="replace").splitlines()
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to read %s: %s", gitignore, e)
     return None
 
 
@@ -63,7 +67,8 @@ def _is_binary(path: Path) -> bool:
         with open(path, "rb") as f:
             head = f.read(8192)
         return b"\0" in head
-    except Exception:
+    except Exception as e:
+        logger.debug("Binary check failed for %s: %s", path, e)
         return True
 
 
@@ -94,8 +99,11 @@ def _walk(
     ignore_patterns: list[str],
     prefix: str = "",
     gitignore_spec: pathspec.PathSpec | None = None,
+    _seen: set[Path] | None = None,
 ) -> list[Path]:
     files: list[Path] = []
+    if _seen is None:
+        _seen = set()
     try:
         entries = list(root.iterdir())
     except PermissionError:
@@ -104,6 +112,12 @@ def _walk(
     for entry in entries:
         name = entry.name
         rel = f"{prefix}{name}"
+
+        resolved = entry.resolve()
+        if resolved in _seen:
+            logger.debug("Skipping symlink loop: %s -> %s", entry, resolved)
+            continue
+        _seen.add(resolved)
 
         if name.startswith(".") or name in IGNORED_DIRS:
             continue
@@ -115,11 +129,11 @@ def _walk(
                 continue
 
         try:
-            if entry.is_file():
+            if entry.is_file() and not entry.is_symlink():
                 if not _is_binary(entry):
                     files.append(entry)
-            elif entry.is_dir():
-                files.extend(_walk(entry, ignore_patterns, f"{rel}/", gitignore_spec))
+            elif entry.is_dir() and not entry.is_symlink():
+                files.extend(_walk(entry, ignore_patterns, f"{rel}/", gitignore_spec, _seen))
         except PermissionError:
             continue
 
@@ -194,12 +208,10 @@ def detect_monorepo(root: Path) -> tuple[bool, str | None]:
     if (root / "turborepo.json").exists():
         return True, "turbo"
     if (root / "package.json").exists():
-        import json as j
-
         try:
-            pkg = j.loads((root / "package.json").read_text())
+            pkg = json.loads((root / "package.json").read_text(errors="replace"))
             if "workspaces" in pkg:
                 return True, "npm-workspaces"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to parse package.json: %s", e)
     return False, None

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 IMPORT_PATTERNS: dict[str, list[tuple[str, re.Pattern, int]]] = {}
 
@@ -191,11 +194,25 @@ def _extract_imports(source_bytes: bytes, language: str) -> list[str]:
     return imports
 
 
+def _build_suffix_index(files: set[str]) -> dict[str, set[str]]:
+    idx: dict[str, set[str]] = {}
+    for f in files:
+        parts = f.split("/")
+        for i in range(len(parts)):
+            suffix = "/".join(parts[i:])
+            idx.setdefault(suffix, set()).add(f)
+            lower = suffix.lower()
+            if lower != suffix:
+                idx.setdefault(lower, set()).add(f)
+    return idx
+
+
 def _candidates_for_import(
     import_str: str,
     source_lang: str,
     source_dir: str,
     all_files: set[str],
+    suffix_index: dict[str, set[str]],
     ext_map: dict[str, list[str]],
 ) -> set[str]:
     candidates: set[str] = set()
@@ -255,6 +272,9 @@ def _candidates_for_import(
         if dotted_path != import_str:
             possible_paths.append(dotted_path)
 
+    def _lookup(key: str) -> set[str]:
+        return suffix_index.get(key, set()) | (suffix_index.get(key.lower(), set()) if key != key.lower() else set())
+
     for base in possible_paths:
         base = base.strip("/")
         for ext in exts:
@@ -263,14 +283,7 @@ def _candidates_for_import(
                 candidates.add(candidate)
             else:
                 suffix = f"/{base}{ext}"
-                for f in all_files:
-                    if f.endswith(suffix):
-                        candidates.add(f)
-                if not candidates:
-                    lower_suffix = suffix.lower()
-                    for f in all_files:
-                        if f.lower().endswith(lower_suffix):
-                            candidates.add(f)
+                candidates.update(_lookup(suffix))
             if not candidates and "/" in base:
                 last_part = base.rsplit("/", 1)[-1]
                 last_candidate = f"{last_part}{ext}"
@@ -278,14 +291,7 @@ def _candidates_for_import(
                     candidates.add(last_candidate)
                 else:
                     last_suffix = f"/{last_part}{ext}"
-                    for f in all_files:
-                        if f.endswith(last_suffix):
-                            candidates.add(f)
-                    if not candidates:
-                        lower_last = last_suffix.lower()
-                        for f in all_files:
-                            if f.lower().endswith(lower_last):
-                                candidates.add(f)
+                    candidates.update(_lookup(last_suffix))
 
         for indicator in mod_indicators:
             candidate = f"{base}/{indicator}"
@@ -293,22 +299,12 @@ def _candidates_for_import(
                 candidates.add(candidate)
             else:
                 suffix = f"/{base}/{indicator}"
-                for f in all_files:
-                    if f.endswith(suffix):
-                        candidates.add(f)
-                if not candidates:
-                    lower_suffix = suffix.lower()
-                    for f in all_files:
-                        if f.lower().endswith(lower_suffix):
-                            candidates.add(f)
+                candidates.update(_lookup(suffix))
 
         if base in all_files:
             candidates.add(base)
         elif not candidates:
-            lower_base = base.lower()
-            for f in all_files:
-                if f.lower() == lower_base:
-                    candidates.add(f)
+            candidates.update(_lookup(base))
         if not candidates and "/" not in base and "." not in base:
             for indicator in mod_indicators:
                 dir_candidate = f"{base}/{indicator}"
@@ -316,9 +312,7 @@ def _candidates_for_import(
                     candidates.add(dir_candidate)
                 else:
                     dir_suffix = f"/{dir_candidate}"
-                    for f in all_files:
-                        if f.endswith(dir_suffix):
-                            candidates.add(f)
+                    candidates.update(_lookup(dir_suffix))
 
     return candidates
 
@@ -331,6 +325,8 @@ def extract_references(
     all_rel = set()
     for pf in parsed_files:
         all_rel.add(pf.path)
+
+    suffix_index = _build_suffix_index(all_rel)
 
     ext_map: dict[str, list[str]] = {}
     for pf in parsed_files:
@@ -352,8 +348,8 @@ def extract_references(
         if rel in file_to_lang:
             try:
                 file_to_bytes[rel] = f.read_bytes()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to read %s: %s", f, e)
 
     references: list[dict[str, Any]] = []
 
@@ -366,7 +362,7 @@ def extract_references(
         source_dir = str(Path(source_rel).parent) if "/" in source_rel else ""
 
         for imp in imp_imports:
-            targets = _candidates_for_import(imp, source_lang, source_dir, all_rel, ext_map)
+            targets = _candidates_for_import(imp, source_lang, source_dir, all_rel, suffix_index, ext_map)
             for target in targets:
                 references.append({
                     "source": source_rel,

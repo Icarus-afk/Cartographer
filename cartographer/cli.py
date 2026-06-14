@@ -285,10 +285,13 @@ def path(ctx, from_name, to_name, max_depth, max_tokens):
 def embed(ctx, repo):
     """Generate vector embeddings for semantic search."""
     click.echo("Embedding...")
-    count = generate_embeddings(ctx.obj["db_path"], repo)
-    click.echo(f"Embedded {count} nodes.")
-    if count == 0:
-        click.echo("All nodes already embedded (run with a new repo to embed).")
+    try:
+        count = generate_embeddings(ctx.obj["db_path"], repo)
+        click.echo(f"Embedded {count} nodes.")
+        if count == 0:
+            click.echo("All nodes already embedded (run with a new repo to embed).")
+    except Exception as e:
+        click.echo(f"Embedding failed: {e}", err=True)
 
 
 @main.command()
@@ -440,8 +443,11 @@ def version():
 @click.pass_context
 def query(ctx, query_str, repo, limit, max_tokens, verbose):
     """Ask a natural language question about the repository."""
-    result = execute_query(query_str, ctx.obj["db_path"], repo, limit, max_tokens)
-    click.echo(result)
+    try:
+        result = execute_query(query_str, ctx.obj["db_path"], repo, limit, max_tokens)
+        click.echo(result)
+    except Exception as e:
+        click.echo(f"Query failed: {e}", err=True)
 
 
 # ── mcp command ────────────────────────────────────────────────────────────────
@@ -478,7 +484,8 @@ def mcp(db):
     }
     """
     from cartographer.mcp.server import main as mcp_main
-    mcp_main()
+    db_path = Path(db) if db else None
+    mcp_main(db_path)
 
 
 # ── git commands ──────────────────────────────────────────────────────────────

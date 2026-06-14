@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 from collections import defaultdict
@@ -7,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from cartographer.storage.connection import get_connection, init_schema
+
+logger = logging.getLogger(__name__)
 
 
 def index_commits(
@@ -49,6 +52,12 @@ def index_commits(
 
     indexed = 0
     authors_seen: dict[str, dict[str, Any]] = {}
+    commit_rows: list[tuple[int, int, str, str, str, str]] = []
+    commit_file_rows: list[tuple[int, str, str]] = []
+    commit_id_map: dict[str, int] = {}
+
+    cursor = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM commits")
+    commit_base_id = cursor.fetchone()[0]
 
     for block in blocks:
         block = block.strip()
@@ -87,21 +96,15 @@ def index_commits(
         ).fetchone()
 
         if existing:
+            commit_id_map[commit_hash] = existing[0]
             continue
 
-        cursor = conn.execute(
-            "INSERT INTO commits (repository_id, hash, author, message, committed_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (repo_id, commit_hash, author_name, message, committed_at),
-        )
-        commit_id = cursor.lastrowid
+        commit_id = commit_base_id + len(commit_rows)
+        commit_id_map[commit_hash] = commit_id
+        commit_rows.append((commit_id, repo_id, commit_hash, author_name, message, committed_at))
 
         for change_type, fpath in changed_files:
-            conn.execute(
-                "INSERT INTO commit_files (commit_id, file_path, change_type) "
-                "VALUES (?, ?, ?)",
-                (commit_id, fpath, change_type),
-            )
+            commit_file_rows.append((commit_id, fpath, change_type))
 
         key = f"{author_name} <{author_email}>"
         if key not in authors_seen:
@@ -110,6 +113,19 @@ def index_commits(
 
         indexed += 1
 
+    if commit_rows:
+        conn.executemany(
+            "INSERT INTO commits (id, repository_id, hash, author, message, committed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)", commit_rows,
+        )
+    if commit_file_rows:
+        conn.executemany(
+            "INSERT INTO commit_files (commit_id, file_path, change_type) "
+            "VALUES (?, ?, ?)", commit_file_rows,
+        )
+
+    author_rows: list[tuple[int, str, str, int]] = []
+    author_updates: list[tuple[int, int]] = []
     for key, info in authors_seen.items():
         existing_author = conn.execute(
             "SELECT id FROM commit_authors WHERE email = ? AND repository_id = ?",
@@ -117,19 +133,26 @@ def index_commits(
         ).fetchone()
 
         if existing_author:
-            conn.execute(
-                "UPDATE commit_authors SET commit_count = commit_count + ? WHERE id = ?",
-                (info["count"], existing_author[0]),
-            )
+            author_updates.append((info["count"], existing_author[0]))
         else:
-            conn.execute(
-                "INSERT INTO commit_authors (repository_id, name, email, commit_count) "
-                "VALUES (?, ?, ?, ?)",
-                (repo_id, info["name"], info["email"], info["count"]),
-            )
+            cursor = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM commit_authors")
+            next_id = cursor.fetchone()[0]
+            author_rows.append((next_id, repo_id, info["name"], info["email"], info["count"]))
+
+    if author_rows:
+        conn.executemany(
+            "INSERT INTO commit_authors (id, repository_id, name, email, commit_count) "
+            "VALUES (?, ?, ?, ?, ?)", author_rows,
+        )
+    for count, author_id in author_updates:
+        conn.execute(
+            "UPDATE commit_authors SET commit_count = commit_count + ? WHERE id = ?",
+            (count, author_id),
+        )
 
     conn.commit()
     conn.close()
+    logger.info("Indexed %d commits, %d authors in %s", indexed, len(authors_seen), repo_path)
     return {"commits_indexed": indexed, "authors_found": len(authors_seen)}
 
 
@@ -190,11 +213,10 @@ def get_node_history(
     repo_name: str | None = None,
     limit: int = 30,
 ) -> list[dict[str, Any]]:
-    import sqlite3
-
     from cartographer.retrieval.traversal import _resolve_target
+    from cartographer.storage.connection import get_connection
 
-    conn = sqlite3.connect(str(db_path))
+    conn = get_connection(db_path)
     node = _resolve_target(conn, target, repo_name)
     conn.close()
 
@@ -315,11 +337,10 @@ def why_introduced(
     repo_path: str | None = None,
     repo_name: str | None = None,
 ) -> dict[str, Any] | None:
-    import sqlite3
-
     from cartographer.retrieval.traversal import _resolve_target
+    from cartographer.storage.connection import get_connection
 
-    conn = sqlite3.connect(str(db_path))
+    conn = get_connection(db_path)
     node = _resolve_target(conn, target, repo_name)
     conn.close()
 

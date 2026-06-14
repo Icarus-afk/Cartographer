@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from cartographer.storage.connection import DEFAULT_DB_PATH, get_connection
 

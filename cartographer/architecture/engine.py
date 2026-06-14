@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import functools
 import json
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 from cartographer.storage.connection import get_connection, init_schema
+
+logger = logging.getLogger(__name__)
 
 # ─── naming pattern definitions ──────────────────────────────────────────────
 
@@ -442,15 +446,15 @@ def _analyze(
     conn: sqlite3.Connection,
     repo_name: str | None,
 ) -> dict[str, Any]:
-    repo_filter = ""
     params: list[Any] = []
+    repo_where = ""
     if repo_name:
-        repo_filter = "AND r.name = ?"
+        repo_where = "WHERE name = ?"
         params.append(repo_name)
 
     repo_row = conn.execute(
         f"""SELECT id, name, path FROM repositories
-            WHERE 1=1 {repo_filter.replace('r.name', 'name')}
+            {repo_where}
             LIMIT 1""",
         params,
     ).fetchone()
@@ -660,6 +664,7 @@ def _analyze_dependency_flow(
 
     flow_summary: dict[str, dict[str, Any]] = {}
 
+    @functools.lru_cache(maxsize=4096)
     def _file_layer(fpath: str) -> str | None:
         fname = Path(fpath).name
         layer_scores: list[tuple[str, float]] = []
@@ -802,24 +807,17 @@ def _persist_architecture(
     fw_patterns: list[dict[str, Any]],
 ) -> None:
     conn.execute("DELETE FROM architecture WHERE repository_id = ?", (repo_id,))
+    rows: list[tuple[int, str, str | None, str]] = []
     for layer_name, info in resolved.items():
-        conn.execute(
-            "INSERT INTO architecture (repository_id, layer, pattern, description) "
-            "VALUES (?, ?, NULL, ?)",
-            (repo_id, layer_name, info["description"]),
-        )
+        rows.append((repo_id, layer_name, None, info["description"]))
     for pat in patterns:
-        conn.execute(
-            "INSERT INTO architecture (repository_id, layer, pattern, description) "
-            "VALUES (?, 'pattern', ?, ?)",
-            (repo_id, pat["name"], pat["description"]),
-        )
+        rows.append((repo_id, "pattern", pat["name"], pat["description"]))
     for fwp in fw_patterns:
-        conn.execute(
-            "INSERT INTO architecture (repository_id, layer, pattern, description) "
-            "VALUES (?, 'framework_pattern', ?, ?)",
-            (repo_id, fwp["name"], fwp.get("description", "")),
-        )
+        rows.append((repo_id, "framework_pattern", fwp["name"], fwp.get("description", "")))
+    conn.executemany(
+        "INSERT INTO architecture (repository_id, layer, pattern, description) "
+        "VALUES (?, ?, ?, ?)", rows,
+    )
     conn.commit()
 
 
@@ -829,15 +827,15 @@ def get_architecture(
 ) -> dict[str, Any]:
     conn = get_connection(db_path)
 
-    repo_filter = ""
     params: list[Any] = []
+    repo_where = ""
     if repo_name:
-        repo_filter = "AND r.name = ?"
+        repo_where = "WHERE name = ?"
         params.append(repo_name)
 
     repo_row = conn.execute(
-        f"""SELECT r.id, r.name, r.path FROM repositories r
-            WHERE 1=1 {repo_filter.replace('r.name', 'name')}
+        f"""SELECT id, name, path FROM repositories
+            {repo_where}
             LIMIT 1""",
         params,
     ).fetchone()

@@ -1,10 +1,29 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 from cartographer.core.models import FrameworkFingerprint
+
+logger = logging.getLogger(__name__)
+
+_FILE_READ_CACHE: dict[str, str | None] = {}
+
+
+def _read_cached(path: Path) -> str | None:
+    key = str(path.resolve())
+    if key in _FILE_READ_CACHE:
+        return _FILE_READ_CACHE[key]
+    try:
+        content = path.read_text(errors="replace")
+        _FILE_READ_CACHE[key] = content
+        return content
+    except Exception as e:
+        logger.debug("Failed to cache read %s: %s", path, e)
+        _FILE_READ_CACHE[key] = None
+        return None
 
 FRAMEWORK_RULES: list[dict[str, Any]] = [
     {
@@ -103,11 +122,9 @@ def _check_indicator(root: Path, indicator: dict[str, Any]) -> bool:
     if "file" in indicator and "content" in indicator:
         target = root / indicator["file"]
         if target.exists():
-            try:
-                content = target.read_text(errors="ignore")
+            content = _read_cached(target)
+            if content is not None:
                 return bool(re.search(indicator["content"], content))
-            except Exception:
-                return False
         return False
 
     if "file" in indicator:
@@ -116,12 +133,11 @@ def _check_indicator(root: Path, indicator: dict[str, Any]) -> bool:
     if "pattern" in indicator and "target" in indicator:
         target = root / indicator["target"]
         if target.exists():
-            try:
-                for line in target.read_text(errors="ignore").splitlines():
+            content = _read_cached(target)
+            if content is not None:
+                for line in content.splitlines():
                     if re.search(indicator["pattern"], line):
                         return True
-            except Exception:
-                pass
         return False
 
     return False

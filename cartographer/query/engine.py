@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from cartographer.compression.engine import estimate_tokens
 from cartographer.retrieval.searcher import search_nodes

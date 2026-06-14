@@ -1,5 +1,9 @@
+import contextlib
+import logging
 import sqlite3
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path.home() / ".cartographer" / "index.db"
 
@@ -14,6 +18,19 @@ def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+@contextlib.contextmanager
+def connect(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
+    conn = get_connection(db_path)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
@@ -101,6 +118,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
         ON nodes(file_path)
     """)
     conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_nodes_name
+        ON nodes(name)
+    """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_edges_repo_type
         ON edges(repository_id, edge_type)
     """)
@@ -115,5 +136,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_embeddings_node_model
         ON embeddings(node_id, model)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_commits_hash
+        ON commits(repository_id, hash)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_commit_files_commit
+        ON commit_files(commit_id)
     """)
     conn.commit()

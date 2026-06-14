@@ -150,7 +150,7 @@ Detects `lerna.json`, `nx.json`, `turbo.json`, `workspace` entries in `package.j
 
 ### Architecture
 
-The parser engine uses a registry pattern — each language has its own parser class that extends `BaseParser` and implements `parse(file_path, source_bytes)` returning a list of `ParsedEntity` trees.
+The parser engine uses a registry pattern — each language has its own parser class that extends `BaseParser` and implements `parse(file_path, source_bytes)` returning a list of `ParsedEntity` trees. All 20 tree-sitter language bindings are imported lazily on first use via `_ensure_parsers()`, and parser instances are cached in `_PARSER_CACHE` (constructed once per language).
 
 ```
 BaseParser (abstract)
@@ -324,6 +324,9 @@ CREATE INDEX idx_nodes_file_path ON nodes(file_path);
 CREATE INDEX idx_edges_repo_type ON edges(repository_id, edge_type);
 CREATE INDEX idx_edges_source ON edges(source_node_id);
 CREATE INDEX idx_edges_target ON edges(target_node_id);
+CREATE INDEX idx_nodes_name ON nodes(name);
+CREATE INDEX idx_commits_hash ON commits(repository_id, hash);
+CREATE INDEX idx_commit_files_commit ON commit_files(commit_id);
 ```
 
 ### Edge Types

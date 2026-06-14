@@ -566,11 +566,17 @@ Claude Desktop / Cursor:
   "mcpServers": {
     "cartographer": {
       "command": "cartographer-mcp",
-      "args": []
+      "args": ["--db", "/path/to/custom.db"]
     }
   }
 }
 ```
+
+The `--db` flag is forwarded to the MCP server and used for all database connections. If omitted, defaults to `~/.cartographer/index.db`.
+
+### Connection Settings
+
+All MCP connections use WAL mode, foreign keys enabled, synchronous=NORMAL, and a 5-second busy timeout.
 
 ---
 

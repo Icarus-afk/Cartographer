@@ -87,7 +87,7 @@ Repository
           │
           ▼
 ┌─────────────────────┐
-│    Parsing Layer     │  19 Tree-sitter parsers, entity extraction
+│    Parsing Layer     │  20 Tree-sitter parsers, entity extraction, parallelized
 └─────────────────────┘
           │
           ▼
@@ -144,6 +144,10 @@ Repository
 
 **Location:** `cartographer/ingestion/`
 
+### File Parsing (`engine.py`)
+
+`_parse_repository` uses `ProcessPoolExecutor` to parse files in parallel across CPU cores. Each worker process builds its own parser cache lazily. The `_parse_single_file` module-level function is picklable for multiprocessing dispatch.
+
 ### File Discovery (`discoverer.py`)
 
 The discovery phase walks the repository tree and collects files for indexing.
@@ -167,6 +171,14 @@ Any entry starting with `.` is also skipped.
 Two-layer binary detection:
 1. **Extension blocklist** — 50+ known binary extensions (`.pyc`, `.so`, `.png`, `.pdf`, `.zip`, `.mp4`, `.wasm`, etc.)
 2. **Null byte check** — reads first 8KB and checks for `\0`
+
+#### Symlink Handling
+
+Symlinks are detected and resolved via a `_seen` set of resolved paths. Symlinks pointing to already-visited directories are skipped to prevent infinite recursion loops.
+
+#### Non-UTF8 Handling
+
+All file reads use `errors="replace"` to gracefully handle non-UTF8 encoded files instead of crashing. `.cartographerignore` and `.gitignore` files are read with the same tolerance.
 
 #### `.cartographerignore` Support
 
@@ -220,7 +232,7 @@ Detects pnpm, lerna, nx, rush, turbo, and npm-workspaces by checking for workspa
 
 ### Reference Extraction (`references.py`)
 
-Cross-file import resolution for 19 languages. Uses regex patterns to extract import statements, then resolves candidates via suffix matching with case-insensitive fallback.
+Cross-file import resolution for 19 languages. Uses regex patterns to extract import statements, then resolves candidates via a precomputed suffix index (`_build_suffix_index`) with O(1) dict lookups instead of O(n×m) linear `endswith` scans across all candidate files. Includes case-insensitive fallback.
 
 **IMPORT_PATTERNS** — language-specific regex patterns. Examples:
 - Python: `from ([\w.]+) import|import ([\w.]+)`
@@ -275,7 +287,7 @@ Error handling captures both parse errors (tree has errors) and exceptions.
 
 ### Registry (`registry.py`)
 
-Maps `Language` enum → parser class via `_PARSER_MAP`. `get_parser(language)` creates a parser instance lazily. `supported_languages()` returns all registered languages.
+Maps `Language` enum → parser class via `_PARSER_MAP` (lazy-loaded). All 20 tree-sitter language bindings are imported on first use via `_ensure_parsers()`, not at module import time, saving ~tens of MB of native library loading on startup. `get_parser(language)` caches instances in `_PARSER_CACHE` so each parser is constructed only once. `supported_languages()` returns all registered languages.
 
 ### JavaScript Parser (`javascript.py`)
 
@@ -352,14 +364,16 @@ Captures top-level JSX expressions like `<App />` and `<Header>` at module root 
 ### Graph Builder (`builder.py`)
 
 The `build_graph()` function:
-1. Creates repository root, directory, and file nodes
-2. For each parsed file, creates entity nodes (classes, functions, methods, etc.)
-3. Creates CONTAINS edges (directory → file, file → class, class → method)
-4. Creates DEFINES edges (file → function/class)
-5. Creates DECLARES edges (file → variable/constant)
-6. Resolves and creates IMPORTS edges between files
+1. Deletes stale data for the repository (embeddings, architecture, edges, nodes) to prevent FK violations on re-index
+2. Creates or updates the repository entry via `INSERT ... ON CONFLICT(path) DO UPDATE`
+3. Computes `MAX(id)+1` to assign explicit sequential IDs for nodes and edges
+4. For each parsed file, creates directory, file, and entity nodes
+5. Creates CONTAINS edges (directory → file, file → class, class → method)
+6. Creates DEFINES edges (file → function/class)
+7. Creates DECLARES edges (file → variable/constant)
+8. Resolves and creates IMPORTS edges between files
 
-Entity deduplication prevents duplicate nodes for the same entity.
+All nodes and edges are inserted in batch via `executemany` (two statements total instead of thousands of individual INSERTs). Explicit IDs computed from `MAX(id)+1` ensure the node IDs referenced by edges always match the real DB autoincrement values, even on re-index.
 
 ### Schema
 
@@ -451,6 +465,8 @@ CREATE INDEX idx_edges_source ON edges(source_id);
 CREATE INDEX idx_edges_target ON edges(target_id);
 CREATE INDEX idx_edges_repo_type ON edges(repository_id, edge_type);
 CREATE INDEX idx_embeddings_node_model ON embeddings(node_id, model);
+CREATE INDEX idx_commits_hash ON commits(repository_id, hash);
+CREATE INDEX idx_commit_files_commit ON commit_files(commit_id);
 ```
 
 ### DB Optimizations
@@ -462,7 +478,10 @@ PRAGMA synchronous=NORMAL;
 PRAGMA cache_size=-8000;        -- ~8MB cache
 PRAGMA temp_store=MEMORY;
 PRAGMA busy_timeout=5000;       -- 5s busy wait
+PRAGMA foreign_keys=ON;
 ```
+
+A `connect()` context manager wraps `get_connection()` with automatic commit on success and rollback on exception, preventing connection leaks. Both the CLI and MCP server set the same PRAGMAs on every connection.
 
 ---
 
@@ -500,8 +519,10 @@ docstring: {docstring if present}
 2. Build text representations with `tqdm` progress bar
 3. Batch-embed via `model.embed(texts)` with `tqdm` progress bar
 4. Serialize vectors as float32 blobs (1536 bytes each)
-5. Batch-insert into embeddings table with `tqdm` progress bar
+5. Batch-insert into embeddings table via `executemany` (single statement instead of per-vector loop)
 6. Skip already-embedded nodes (incremental — safe to rerun)
+
+Uses top-level `import json` (not lazy per-row imports) for metadata deserialization.
 
 Supports `--repo` filter to embed only one repository's nodes.
 
@@ -612,9 +633,12 @@ SQL-based fuzzy search across all nodes:
 
 Finds all nodes that depend on a given target:
 1. Resolve target string to a node ID (fuzzy name match)
-2. Query all edges where the target is the `source_id`
-3. Collect and group by edge type (IMPORTS, DEFINES, CONTAINS)
-4. Return grouped results with file paths
+2. Batch-query all edges where the target is `target_node_id IN (...)` (batch-collects multiple levels)
+3. Batch-resolve all source node IDs with a single `WHERE id IN (...)` query (eliminates N+1 pattern)
+4. Collect and group by edge type (IMPORTS, DEFINES, CONTAINS)
+5. Return grouped results with file paths
+
+Path result construction also uses batched `WHERE id IN (...)` instead of per-node queries. BFS traversal uses `collections.deque` (O(1) popleft) instead of `list.pop(0)` (O(n)).
 
 ### Neighbors (`traversal.py`)
 
@@ -868,7 +892,7 @@ Semantic: SIMILAR_TO, RELATED_TO, DUPLICATES, PATTERN_MATCH
 | `test_query.py` | 7 | Intent classification for all 9 types |
 | `test_architecture.py` | 5 | Layer detection, pattern detection |
 
-**Total:** 78+ tests (all passing, lint clean)
+**Total:** 73 tests (all passing, lint clean)
 
 ### Running Tests
 
@@ -961,5 +985,5 @@ Find duplicated validation logic.
 ---
 
 **Last updated:** 2026-06-14
-**Tests:** 78+ passing, lint clean
+**Tests:** 73 passing, lint clean
 **Verified on:** 14 repos across 12 languages

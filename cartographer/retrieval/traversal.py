@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
+from collections import deque
 from pathlib import Path
 from typing import Any
 
 from cartographer.storage.connection import DEFAULT_DB_PATH, get_connection
+
+logger = logging.getLogger(__name__)
 
 GraphResult = dict[str, Any]
 
@@ -77,34 +81,51 @@ def impact_analysis(
     callers: set[int] = set()
     dependents: list[GraphResult] = []
 
-    def find_callers(current_id: int) -> None:
-        if current_id in callers:
-            return
-        callers.add(current_id)
+    pending: set[int] = {node_id}
 
+    while pending:
+        batch = pending.copy()
+        pending.clear()
+
+        placeholders = ",".join("?" for _ in batch)
         edges = conn.execute(
-            """SELECT DISTINCT source_node_id, edge_type
-               FROM edges
-               WHERE target_node_id = ?""",
-            (current_id,),
+            f"""SELECT DISTINCT source_node_id, edge_type
+                FROM edges
+                WHERE target_node_id IN ({placeholders})""",
+            tuple(batch),
         ).fetchall()
 
+        if not edges:
+            continue
+
+        source_ids = set()
+        edge_map: dict[int, list[str]] = {}
         for src_id, edge_type in edges:
-            src = conn.execute(
-                "SELECT id, node_type, name, file_path FROM nodes WHERE id = ?",
-                (src_id,),
-            ).fetchone()
-            if src:
+            if src_id not in callers:
+                source_ids.add(src_id)
+                edge_map.setdefault(src_id, []).append(edge_type)
+
+        if not source_ids:
+            continue
+
+        id_placeholders = ",".join("?" for _ in source_ids)
+        rows = conn.execute(
+            f"SELECT id, node_type, name, file_path FROM nodes WHERE id IN ({id_placeholders})",
+            tuple(source_ids),
+        ).fetchall()
+
+        for row in rows:
+            nid, ntype, nname, nfpath = row
+            callers.add(nid)
+            for edge_type in edge_map.get(nid, []):
                 dependents.append({
-                    "id": src[0],
-                    "type": src[1],
-                    "name": src[2],
-                    "file_path": src[3],
+                    "id": nid,
+                    "type": ntype,
+                    "name": nname,
+                    "file_path": nfpath,
                     "via_edge": edge_type,
                 })
-                find_callers(src[0])
-
-    find_callers(node_id)
+            pending.add(nid)
     conn.close()
     return dependents
 
@@ -175,11 +196,11 @@ def find_path(
     found = False
 
     def bfs(start_id: int, target_id: int) -> list[GraphResult] | None:
-        queue: list[tuple[int, list[int]]] = [(start_id, [start_id])]
+        queue: deque[tuple[int, list[int]]] = deque([(start_id, [start_id])])
         visited_ids: set[int] = {start_id}
 
         while queue and not found:
-            current_id, path = queue.pop(0)
+            current_id, path = queue.popleft()
             if current_id == target_id:
                 return _build_path_result(conn, path)
 
@@ -208,12 +229,15 @@ def find_path(
 def _build_path_result(
     conn: sqlite3.Connection, node_ids: list[int]
 ) -> list[GraphResult]:
+    placeholders = ",".join("?" for _ in node_ids)
+    rows = conn.execute(
+        f"SELECT id, node_type, name, file_path FROM nodes WHERE id IN ({placeholders})",
+        tuple(node_ids),
+    ).fetchall()
+    node_map = {r[0]: r for r in rows}
     results: list[GraphResult] = []
     for i, nid in enumerate(node_ids):
-        row = conn.execute(
-            "SELECT id, node_type, name, file_path FROM nodes WHERE id = ?",
-            (nid,),
-        ).fetchone()
+        row = node_map.get(nid)
         if row:
             results.append({
                 "id": row[0],

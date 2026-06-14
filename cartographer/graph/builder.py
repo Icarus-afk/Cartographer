@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from pathlib import Path
 
 from cartographer.core.models import EntityKind, ParsedEntity, ParsedFile, RepositoryManifest
 from cartographer.storage.connection import get_connection, init_schema
+
+logger = logging.getLogger(__name__)
 
 GraphStats = dict
 
@@ -34,8 +37,48 @@ def build_graph(
         "directories": 0,
     }
 
+    conn.execute(
+        "DELETE FROM embeddings WHERE node_id IN (SELECT id FROM nodes WHERE repository_id = ?)",
+        (repo_id,),
+    )
+    conn.execute(
+        "DELETE FROM architecture WHERE repository_id = ?", (repo_id,)
+    )
+    conn.execute(
+        "DELETE FROM edges WHERE repository_id = ?", (repo_id,)
+    )
+    conn.execute(
+        "DELETE FROM nodes WHERE repository_id = ?", (repo_id,)
+    )
+
+    cursor = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM nodes")
+    base_id = cursor.fetchone()[0]
+    cursor = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM edges")
+    edge_base_id = cursor.fetchone()[0]
+
     dir_cache: dict[str, int] = {}
     file_cache: dict[str, int] = {}
+    node_rows: list[tuple[int, int, str, str, str, str | None]] = []
+    edge_rows: list[tuple[int, int, int, int, str]] = []
+
+    def _batch_node(kind: EntityKind, name: str, file_path: str, metadata: dict) -> int:
+        nonlocal node_idx
+        node_idx += 1
+        actual_id = base_id + node_idx - 1
+        node_rows.append((
+            actual_id, repo_id, kind.value, name, file_path,
+            json.dumps(metadata) if metadata else None,
+        ))
+        return actual_id
+
+    def _batch_edge(src: int, tgt: int, etype: str) -> None:
+        nonlocal edge_idx
+        edge_idx += 1
+        actual_id = edge_base_id + edge_idx - 1
+        edge_rows.append((actual_id, repo_id, src, tgt, etype))
+
+    node_idx = 0
+    edge_idx = 0
 
     for pf in parsed_files:
         parts = pf.path.split("/")
@@ -44,54 +87,57 @@ def build_graph(
         for i in range(len(parts) - 1):
             dir_path = "/".join(parts[: i + 1])
             if dir_path not in dir_cache:
-                dir_id = _insert_node(
-                    conn, repo_id, EntityKind.DIRECTORY,
-                    parts[i], dir_path, {},
-                )
+                dir_id = _batch_node(EntityKind.DIRECTORY, parts[i], dir_path, {})
                 stats["nodes"] += 1
                 stats["directories"] = stats.get("directories", 0) + 1
                 dir_cache[dir_path] = dir_id
 
                 if parent_id:
-                    _insert_edge(conn, repo_id, parent_id, dir_id, "CONTAINS")
+                    _batch_edge(parent_id, dir_id, "CONTAINS")
                     stats["edges"] += 1
             parent_id = dir_cache[dir_path]
 
-        file_id = _insert_node(
-            conn, repo_id, EntityKind.FILE, pf.path,
-            pf.path, {"language": pf.language.value},
-        )
+        file_id = _batch_node(EntityKind.FILE, pf.path, pf.path,
+                              {"language": pf.language.value})
         stats["files"] += 1
         stats["nodes"] += 1
         file_cache[pf.path] = file_id
 
         if parent_id:
-            _insert_edge(conn, repo_id, parent_id, file_id, "CONTAINS")
+            _batch_edge(parent_id, file_id, "CONTAINS")
             stats["edges"] += 1
 
         for entity in pf.entities:
-            _process_entity(conn, repo_id, file_id, pf.path, entity, stats)
+            _process_entity(entity, stats, file_id, pf.path, _batch_node, _batch_edge)
 
     if references:
         for ref in references:
             source_id = file_cache.get(ref["source"])
             target_id = file_cache.get(ref["target"])
             if source_id and target_id and source_id != target_id:
-                _insert_edge(conn, repo_id, source_id, target_id, "IMPORTS")
+                _batch_edge(source_id, target_id, "IMPORTS")
                 stats["edges"] += 1
 
+    conn.executemany(
+        "INSERT INTO nodes (id, repository_id, node_type, name, file_path, metadata_json) "
+        "VALUES (?, ?, ?, ?, ?, ?)", node_rows,
+    )
+    conn.executemany(
+        "INSERT INTO edges (id, repository_id, source_node_id, target_node_id, edge_type) "
+        "VALUES (?, ?, ?, ?, ?)", edge_rows,
+    )
     conn.commit()
     conn.close()
     return stats
 
 
 def _process_entity(
-    conn: sqlite3.Connection,
-    repo_id: int,
-    file_id: int,
-    file_path: str,
     entity: ParsedEntity,
     stats: GraphStats,
+    file_id: int,
+    file_path: str,
+    batch_node,
+    batch_edge,
     parent_id: int | None = None,
 ) -> int:
     kind = entity.kind
@@ -99,19 +145,17 @@ def _process_entity(
     if kind in (EntityKind.MODULE,):
         return file_id
 
-    entity_id = _insert_node(conn, repo_id, kind, entity.name, file_path, entity.metadata)
+    entity_id = batch_node(kind, entity.name, file_path, entity.metadata)
     stats["nodes"] += 1
-
-    kind_key = kind.value
-    stats[kind_key] = stats.get(kind_key, 0) + 1
+    stats[kind.value] = stats.get(kind.value, 0) + 1
 
     edge_type = _edge_type_for(kind)
     source_id = parent_id if parent_id else file_id
-    _insert_edge(conn, repo_id, source_id, entity_id, edge_type)
+    batch_edge(source_id, entity_id, edge_type)
     stats["edges"] += 1
 
     for child in entity.children:
-        _process_entity(conn, repo_id, file_id, file_path, child, stats, entity_id)
+        _process_entity(child, stats, file_id, file_path, batch_node, batch_edge, entity_id)
 
     return entity_id
 
@@ -121,24 +165,14 @@ def _ensure_repository(
     manifest: RepositoryManifest | None = None,
 ) -> int:
     name = Path(repo_path).name
-    existing = conn.execute(
-        "SELECT id, manifest_json FROM repositories WHERE path = ?", (repo_path,)
-    ).fetchone()
-    if existing:
-        repo_id = existing[0]
-        if manifest:
-            manifest_json = _manifest_to_json(manifest)
-            conn.execute(
-                "UPDATE repositories SET manifest_json = ? WHERE id = ?",
-                (manifest_json, repo_id),
-            )
-        return repo_id
     manifest_json = _manifest_to_json(manifest) if manifest else None
     cursor = conn.execute(
-        "INSERT INTO repositories (path, name, manifest_json) VALUES (?, ?, ?)",
-        (repo_path, name, manifest_json),
+        "INSERT INTO repositories (path, name, manifest_json) VALUES (?, ?, ?) "
+        "ON CONFLICT(path) DO UPDATE SET manifest_json = COALESCE(?, manifest_json)",
+        (repo_path, name, manifest_json, manifest_json),
     )
-    return cursor.lastrowid
+    row = conn.execute("SELECT id FROM repositories WHERE path = ?", (repo_path,)).fetchone()
+    return row[0]
 
 
 def _manifest_to_json(manifest: RepositoryManifest) -> str:
@@ -159,37 +193,6 @@ def _manifest_to_json(manifest: RepositoryManifest) -> str:
         "total_dirs": manifest.total_dirs,
         "total_references": manifest.total_references,
     })
-
-
-def _insert_node(
-    conn: sqlite3.Connection,
-    repo_id: int,
-    kind: EntityKind,
-    name: str,
-    file_path: str,
-    metadata: dict,
-) -> int:
-    cursor = conn.execute(
-        "INSERT INTO nodes (repository_id, node_type, name, file_path, metadata_json) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (repo_id, kind.value, name, file_path, json.dumps(metadata) if metadata else None),
-    )
-    return cursor.lastrowid
-
-
-def _insert_edge(
-    conn: sqlite3.Connection,
-    repo_id: int,
-    source_id: int,
-    target_id: int,
-    edge_type: str,
-) -> int:
-    cursor = conn.execute(
-        "INSERT INTO edges (repository_id, source_node_id, target_node_id, edge_type) "
-        "VALUES (?, ?, ?, ?)",
-        (repo_id, source_id, target_id, edge_type),
-    )
-    return cursor.lastrowid
 
 
 def _edge_type_for(kind: EntityKind) -> str:

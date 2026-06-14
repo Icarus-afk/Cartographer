@@ -1,4 +1,6 @@
+import logging
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from cartographer.core.models import IngestionResult, Language, ParsedFile, RepositoryManifest
@@ -13,6 +15,8 @@ from cartographer.ingestion.discoverer import (
 from cartographer.ingestion.fingerprint import fingerprint_frameworks
 from cartographer.ingestion.references import extract_references
 from cartographer.parser.registry import get_parser, supported_languages
+
+logger = logging.getLogger(__name__)
 
 
 def index_repository(
@@ -100,43 +104,51 @@ def index_repository(
     )
 
 
+def _parse_single_file(args: tuple[Path, Path, dict[Language, tuple[str, ...]]]) -> tuple[ParsedFile | None, list[str]]:
+    f, root, ext_map = args
+    ext = f.suffix.lower()
+    lang = Language.UNKNOWN
+    for known_lang, exts in ext_map.items():
+        if ext in exts:
+            lang = known_lang
+            break
+    if lang == Language.UNKNOWN:
+        return None, []
+    parser = get_parser(lang)
+    if not parser:
+        return None, []
+    try:
+        source, parse_errors = parser.parse_file(f)
+        if source:
+            entities = parser.extract_entities(source, str(f.relative_to(root)))
+            pf = ParsedFile(path=str(f.relative_to(root)), language=lang, entities=entities)
+            return pf, parse_errors
+        return None, parse_errors
+    except Exception as e:
+        return None, [f"Parse error {f}: {e}"]
+
+
 def _parse_repository(
     files: list[Path],
     root: Path,
     errors: list[str],
 ) -> list[ParsedFile]:
-    available = supported_languages()
-    target_langs = set(available)
+    ext_map = {lang: exts for lang, exts in LANGUAGE_EXTENSION_MAP_REVERSE.items()
+               if lang in supported_languages()}
 
-    parsers = {}
-    for lang in target_langs:
-        parser = get_parser(lang)
-        if parser:
-            parsers[lang] = parser
-
+    work = [(f, root, ext_map) for f in files]
     parsed_files: list[ParsedFile] = []
 
-    for f in files:
-        ext = f.suffix.lower()
-        lang = Language.UNKNOWN
-        for known_lang, parser in parsers.items():
-            if ext in LANGUAGE_EXTENSION_MAP_REVERSE.get(known_lang, ()):
-                lang = known_lang
-                break
-
-        if lang == Language.UNKNOWN or lang not in parsers:
-            continue
-
-        try:
-            parser = parsers[lang]
-            source, parse_errors = parser.parse_file(f)
-            if source:
-                entities = parser.extract_entities(source, str(f.relative_to(root)))
-                pf = ParsedFile(path=str(f.relative_to(root)), language=lang, entities=entities)
-                parsed_files.append(pf)
-            errors.extend(parse_errors)
-        except Exception as e:
-            errors.append(f"Parse error {f}: {e}")
+    with ProcessPoolExecutor() as executor:
+        futures = {executor.submit(_parse_single_file, args): args for args in work}
+        for future in as_completed(futures):
+            try:
+                pf, parse_errors = future.result()
+                if pf:
+                    parsed_files.append(pf)
+                errors.extend(parse_errors)
+            except Exception as e:
+                errors.append(f"Parse worker failed: {e}")
 
     return parsed_files
 

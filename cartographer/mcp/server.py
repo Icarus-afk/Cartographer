@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -18,22 +19,43 @@ from cartographer.retrieval.traversal import (
     impact_analysis,
 )
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_DB = Path.home() / ".cartographer" / "index.db"
 
-mcp = FastMCP("Cartographer")
+_CUSTOM_DB_PATH: Path | None = None
+_mcp: FastMCP | None = None
+
+
+def mcp() -> FastMCP:
+    global _mcp
+    if _mcp is None:
+        _mcp = FastMCP("Cartographer")
+    return _mcp
 
 
 def _db(db_str: str | None) -> Path:
-    return Path(db_str) if db_str else DEFAULT_DB
+    global _CUSTOM_DB_PATH
+    if db_str:
+        return Path(db_str)
+    if _CUSTOM_DB_PATH is not None:
+        return _CUSTOM_DB_PATH
+    return DEFAULT_DB
 
 
 def _get_conn(db: str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(_db(db)))
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA cache_size=-8000")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
-@mcp.resource(
+@mcp().resource(
     "cartographer://repos",
     description="List all indexed repositories",
 )
@@ -49,7 +71,7 @@ def get_repos() -> str:
     return "\n".join(lines)
 
 
-@mcp.resource(
+@mcp().resource(
     "cartographer://repo/{name}",
     description="Get repository details and statistics",
 )
@@ -83,7 +105,7 @@ def get_repo(name: str) -> str:
     )
 
 
-@mcp.resource(
+@mcp().resource(
     "cartographer://node/{node_id}",
     description="Get details of a specific node by ID",
 )
@@ -109,7 +131,7 @@ def get_node(node_id: str) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool(
+@mcp().tool(
     name="search",
     description="Search for nodes (classes, functions, files) by name in the knowledge graph",
 )
@@ -131,7 +153,7 @@ def search(
     return "\n".join(lines)
 
 
-@mcp.tool(
+@mcp().tool(
     name="impact",
     description="Analyze what depends on a given file, class, or function",
 )
@@ -154,7 +176,7 @@ def impact(
     return "\n".join(lines)
 
 
-@mcp.tool(
+@mcp().tool(
     name="neighbors",
     description="Show neighboring nodes of a class, function, or file in the graph",
 )
@@ -181,7 +203,7 @@ def neighbors(
     return "\n".join(lines)
 
 
-@mcp.tool(
+@mcp().tool(
     name="path",
     description="Find the shortest path between two nodes in the knowledge graph",
 )
@@ -203,7 +225,7 @@ def find_path_between(
     return "\n".join(lines)
 
 
-@mcp.tool(
+@mcp().tool(
     name="summarize",
     description="Generate a summary of the repository from the knowledge graph",
 )
@@ -231,7 +253,7 @@ def summarize(
     return "\n".join(lines)
 
 
-@mcp.tool(
+@mcp().tool(
     name="architecture",
     description="Detect or retrieve the architecture layers and patterns of the repository",
 )
@@ -276,7 +298,7 @@ def architecture(
     return "\n".join(lines)
 
 
-@mcp.tool(
+@mcp().tool(
     name="similar",
     description="Find semantically similar nodes using vector embeddings",
 )
@@ -306,7 +328,7 @@ def similar(
     return "\n".join(lines)
 
 
-@mcp.tool(
+@mcp().tool(
     name="ask",
     description="Ask a natural language question about the repository",
 )
@@ -320,8 +342,11 @@ def ask(
     return result
 
 
-def main() -> None:
-    mcp.run()
+def main(db_path: Path | None = None) -> None:
+    global _CUSTOM_DB_PATH
+    if db_path is not None:
+        _CUSTOM_DB_PATH = db_path
+    mcp().run()
 
 
 if __name__ == "__main__":
