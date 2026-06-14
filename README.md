@@ -22,6 +22,25 @@ cartographer version
 # cartographer 0.1.0
 ```
 
+### VS Code Extension
+
+Cartographer includes a VS Code extension for exploring your repository's knowledge graph from within the editor:
+
+```bash
+cd editors/vscode
+npm install && npm run compile
+```
+
+Then install the extension by copying the `editors/vscode` folder to `~/.vscode/extensions/cartographer` or packaging it with `vsce package`.
+
+Available commands:
+- `Cartographer: Index Repository` — index the current workspace
+- `Cartographer: Search Graph` — search entities by name
+- `Cartographer: Show Repository Summary` — node/edge counts and breakdowns
+- `Cartographer: Show Architecture` — detect layers and patterns
+- `Cartographer: Impact Analysis` — find dependents of a symbol
+- `Cartographer: Open Graph View` — interactive graph visualization
+
 ### Dependencies
 
 | Dependency | Purpose |

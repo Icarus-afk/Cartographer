@@ -125,9 +125,10 @@ Repository
 ## Subsystem Map
 
 | Subsystem | Location | Responsibility |
-|---|---|---|
+|---|---|---|---|
 | Ingestion Engine | `cartographer/ingestion/` | Discover files, detect languages/frameworks, extract references, handle gitignore |
 | Parser Engine | `cartographer/parser/` | Tree-sitter AST extraction for 19 languages |
+| VS Code Extension | `editors/vscode/` | Repository intelligence in the editor |
 | Graph Engine | `cartographer/graph/` | Build and persist knowledge graph (nodes + edges) |
 | Embedding Engine | `cartographer/embedding/` | Generate 384-dim vector embeddings, numpy-batched similarity |
 | Architecture Engine | `cartographer/architecture/` | Detect layers, patterns, frameworks, dependency flows |

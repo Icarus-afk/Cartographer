@@ -1,0 +1,84 @@
+{
+  "name": "cartographer",
+  "displayName": "Cartographer",
+  "description": "Repository intelligence — explore code as a knowledge graph",
+  "version": "0.1.0",
+  "publisher": "cartographer",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Visualization", "Other"],
+  "icon": "resources/icon.png",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cartographer.index",
+        "title": "Cartographer: Index Repository"
+      },
+      {
+        "command": "cartographer.search",
+        "title": "Cartographer: Search Graph"
+      },
+      {
+        "command": "cartographer.summarize",
+        "title": "Cartographer: Show Repository Summary"
+      },
+      {
+        "command": "cartographer.architecture",
+        "title": "Cartographer: Show Architecture"
+      },
+      {
+        "command": "cartographer.impact",
+        "title": "Cartographer: Impact Analysis"
+      },
+      {
+        "command": "cartographer.graph",
+        "title": "Cartographer: Open Graph View"
+      },
+      {
+        "command": "cartographer.refresh",
+        "title": "Cartographer: Refresh Views"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "cartographer", "title": "Cartographer", "icon": "resources/icon.svg" }
+      ]
+    },
+    "views": {
+      "cartographer": [
+        { "id": "cartographer.repos", "name": "Repositories" },
+        { "id": "cartographer.search", "name": "Search Results" }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "cartographer.index",
+          "when": "view == cartographer.repos",
+          "group": "navigation"
+        },
+        {
+          "command": "cartographer.refresh",
+          "when": "view == cartographer.repos",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src/"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0",
+    "eslint": "^8.50.0"
+  }
+}
