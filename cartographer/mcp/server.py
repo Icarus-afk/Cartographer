@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -24,6 +25,88 @@ mcp = FastMCP("Cartographer")
 
 def _db(db_str: str | None) -> Path:
     return Path(db_str) if db_str else DEFAULT_DB
+
+
+def _get_conn(db: str | None = None) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(_db(db)))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@mcp.resource(
+    "cartographer://repos",
+    description="List all indexed repositories",
+)
+def get_repos() -> str:
+    conn = _get_conn()
+    rows = conn.execute("SELECT id, name, path FROM repositories ORDER BY name").fetchall()
+    conn.close()
+    if not rows:
+        return "No repositories indexed."
+    lines = ["Indexed repositories:"]
+    for r in rows:
+        lines.append(f"  [{r['id']}] {r['name']}  ({r['path']})")
+    return "\n".join(lines)
+
+
+@mcp.resource(
+    "cartographer://repo/{name}",
+    description="Get repository details and statistics",
+)
+def get_repo(name: str) -> str:
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT id, name, path FROM repositories WHERE name = ?", (name,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return f"No repository found: {name}"
+    node_count = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE repository_id = ?", (row["id"],)
+    ).fetchone()[0]
+    edge_count = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE repository_id = ?", (row["id"],)
+    ).fetchone()[0]
+    embed_count = conn.execute(
+        "SELECT COUNT(*) FROM embeddings emb"
+        " JOIN nodes n ON emb.node_id = n.id"
+        " WHERE n.repository_id = ?",
+        (row["id"],),
+    ).fetchone()[0]
+    conn.close()
+    return (
+        f"Repository: {row['name']}\n"
+        f"  Path: {row['path']}\n"
+        f"  Nodes: {node_count}\n"
+        f"  Edges: {edge_count}\n"
+        f"  Embeddings: {embed_count}"
+    )
+
+
+@mcp.resource(
+    "cartographer://node/{node_id}",
+    description="Get details of a specific node by ID",
+)
+def get_node(node_id: str) -> str:
+    conn = _get_conn()
+    row = conn.execute(
+        """SELECT n.id, n.name, n.node_type, n.file_path, n.metadata_json, r.name as repo
+           FROM nodes n
+           JOIN repositories r ON n.repository_id = r.id
+           WHERE n.id = ?""",
+        (int(node_id),),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return f"No node with id {node_id}"
+    lines = [f"Node [{row['id']}]: {row['name']} ({row['node_type']})"]
+    lines.append(f"  Repository: {row['repo']}")
+    lines.append(f"  File: {row['file_path'] or '(root)'}")
+    if row["metadata_json"]:
+        meta = json.loads(row["metadata_json"])
+        if meta:
+            lines.append(f"  Metadata: {json.dumps(meta, indent=2)}")
+    return "\n".join(lines)
 
 
 @mcp.tool(
@@ -81,7 +164,7 @@ def neighbors(
     depth: int = 2,
     db: str | None = None,
 ) -> str:
-    conn = sqlite3.connect(str(_db(db)))
+    conn = _get_conn(db)
     node = _resolve_target(conn, name, repo)
     conn.close()
 
@@ -204,7 +287,7 @@ def similar(
     db: str | None = None,
 ) -> str:
     db_path = _db(db)
-    conn = sqlite3.connect(str(db_path))
+    conn = _get_conn(db)
     node = _resolve_target(conn, target, repo)
     conn.close()
 
