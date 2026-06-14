@@ -3,6 +3,8 @@ from __future__ import annotations
 import fnmatch
 from pathlib import Path
 
+import pathspec
+
 from cartographer.core.models import LANGUAGE_EXTENSIONS, Language
 
 IGNORED_DIRS = {
@@ -42,6 +44,18 @@ def _load_ignore_patterns(root: Path) -> list[str]:
     return patterns
 
 
+def _load_gitignore_spec(root: Path) -> pathspec.PathSpec | None:
+    gitignore = root / ".gitignore"
+    if gitignore.exists():
+        try:
+            return pathspec.PathSpec.from_lines(
+                "gitwildmatch", gitignore.read_text().splitlines()
+            )
+        except Exception:
+            pass
+    return None
+
+
 def _is_binary(path: Path) -> bool:
     if path.suffix.lower() in BINARY_EXTENSIONS:
         return True
@@ -66,13 +80,21 @@ def _matches_pattern(name: str, patterns: list[str]) -> bool:
 def discover_files(
     root: Path,
     ignore_patterns: list[str] | None = None,
+    gitignore_spec: pathspec.PathSpec | None = None,
 ) -> list[Path]:
     if ignore_patterns is None:
         ignore_patterns = _load_ignore_patterns(root)
-    return _walk(root, ignore_patterns)
+    if gitignore_spec is None:
+        gitignore_spec = _load_gitignore_spec(root)
+    return _walk(root, ignore_patterns, gitignore_spec=gitignore_spec)
 
 
-def _walk(root: Path, ignore_patterns: list[str]) -> list[Path]:
+def _walk(
+    root: Path,
+    ignore_patterns: list[str],
+    prefix: str = "",
+    gitignore_spec: pathspec.PathSpec | None = None,
+) -> list[Path]:
     files: list[Path] = []
     try:
         entries = list(root.iterdir())
@@ -81,18 +103,23 @@ def _walk(root: Path, ignore_patterns: list[str]) -> list[Path]:
 
     for entry in entries:
         name = entry.name
+        rel = f"{prefix}{name}"
 
         if name.startswith(".") or name in IGNORED_DIRS:
             continue
-        if _matches_pattern(name, ignore_patterns):
+        if _matches_pattern(rel, ignore_patterns):
             continue
+        if gitignore_spec:
+            match_rel = rel[:-1] if rel.endswith("/") else rel
+            if gitignore_spec.match_file(match_rel):
+                continue
 
         try:
             if entry.is_file():
                 if not _is_binary(entry):
                     files.append(entry)
             elif entry.is_dir():
-                files.extend(_walk(entry, ignore_patterns))
+                files.extend(_walk(entry, ignore_patterns, f"{rel}/", gitignore_spec))
         except PermissionError:
             continue
 
