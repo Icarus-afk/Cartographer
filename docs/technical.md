@@ -289,6 +289,23 @@ Error handling captures both parse errors (tree has errors) and exceptions.
 
 Maps `Language` enum → parser class via `_PARSER_MAP` (lazy-loaded). All 20 tree-sitter language bindings are imported on first use via `_ensure_parsers()`, not at module import time, saving ~tens of MB of native library loading on startup. `get_parser(language)` caches instances in `_PARSER_CACHE` so each parser is constructed only once. `supported_languages()` returns all registered languages.
 
+### Python Parser (`python.py`)
+
+Dispatches top-level children to specialized extractors:
+
+| Node Type | Extracted As | Method |
+|---|---|---|
+| `function_definition` | FUNCTION (or METHOD if `@property`) | `_extract_function` |
+| `class_definition` | CLASS + method children | `_extract_class` |
+| `decorated_definition` | delegates to inner function/class | `_extract_decorated` |
+| `import_statement` / `import_from_statement` | MODULE | `_extract_import` |
+
+**API Endpoint Detection:** Decorators containing `.route(`, `.get(`, `.post(`, `.put(`, `.delete(`, `.patch(`, `.options(`, `.head(`, or `.trace(` promote the function kind to `API_ENDPOINT` instead of FUNCTION. The HTTP methods and route path are captured in metadata.
+
+**Inheritance:** Base classes from `argument_list` are extracted as `INHERITS` relationships — e.g., `class View(BaseView)` creates `View --[INHERITS]--> BaseView`.
+
+**Call Detection:** Recursive walk of each function body finds `call` nodes; simple identifier calls (no dots, e.g., `authenticate_user()`) are captured as `CALLS` relationships.
+
 ### JavaScript Parser (`javascript.py`)
 
 Dispatches top-level children to specialized extractors:
@@ -355,6 +372,20 @@ Captures top-level JSX expressions like `<App />` and `<Header>` at module root 
 | `ZigParser` | `languages/zig.py` | `tree-sitter-zig` |
 | `GroovyParser` | `languages/groovy.py` | `tree-sitter-groovy` |
 
+### Relationship Extraction
+
+Four parsers emit inter-entity relationships that are resolved into edges by the graph builder:
+
+| Parser | INHERITS | IMPLEMENTS | CALLS | API Endpoints |
+|---|---|---|---|---|
+| PythonParser | Class bases from `argument_list` | — | Same-file function calls via AST walk | Decorators with `.route()`, `.get()`, etc. |
+| JavaScriptParser | `superclass` field in class | — | — | — |
+| TypeScriptParser | `superclass` field in class | — | — | — |
+| JavaParser | `superclass` field in class | `interfaces` field in class | — | — |
+| RustParser | — | `impl Trait for Type` blocks | — | — |
+
+Relationships are resolved by matching target names against all entity node names in the repository. Edges are created only for unambiguous matches (single entity with that name).
+
 ---
 
 ## Graph Engine — Deep Dive
@@ -369,9 +400,10 @@ The `build_graph()` function:
 3. Computes `MAX(id)+1` to assign explicit sequential IDs for nodes and edges
 4. For each parsed file, creates directory, file, and entity nodes
 5. Creates CONTAINS edges (directory → file, file → class, class → method)
-6. Creates DEFINES edges (file → function/class)
+6. Creates DEFINES edges (file → function/class/API endpoint)
 7. Creates DECLARES edges (file → variable/constant)
 8. Resolves and creates IMPORTS edges between files
+9. **Resolves entity relationships** — after all entity nodes are built, walks each entity's `relationships` list, matches target names to entity node IDs, and creates INHERITS, IMPLEMENTS, and CALLS edges
 
 All nodes and edges are inserted in batch via `executemany` (two statements total instead of thousands of individual INSERTs). Explicit IDs computed from `MAX(id)+1` ensure the node IDs referenced by edges always match the real DB autoincrement values, even on re-index.
 
@@ -841,13 +873,15 @@ History: COMMIT, AUTHOR, BRANCH, TAG, RELEASE
 
 ```
 Structural: CONTAINS, DEFINES, DECLARES
-Dependency: IMPORTS, CALLS, USES, REFERENCES, DEPENDS_ON
+Dependency: IMPORTS, CALLS
 OOP: INHERITS, IMPLEMENTS, OVERRIDES
 API: EXPOSES, CONSUMES, RETURNS
 Database: READS, WRITES, MIGRATES
 History: CREATED_BY, MODIFIED_BY, INTRODUCED_IN, REMOVED_IN
 Semantic: SIMILAR_TO, RELATED_TO, DUPLICATES, PATTERN_MATCH
 ```
+
+**Implemented (extracted at parse/build time):** CONTAINS, DEFINES, DECLARES, IMPORTS, **CALLS** (same-file function calls via tree-sitter AST walk), **INHERITS** (class base/superclass extraction), **IMPLEMENTS** (Java `implements`, Rust `impl Trait for Type`).
 
 ---
 

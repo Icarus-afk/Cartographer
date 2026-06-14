@@ -139,6 +139,13 @@ class EntityKind(str, Enum):
 
 
 @dataclass
+class Relationship:
+    target_name: str
+    relationship_type: str
+    target_file: str | None = None
+
+
+@dataclass
 class ParsedEntity:
     kind: EntityKind
     name: str
@@ -146,6 +153,7 @@ class ParsedEntity:
     docstring: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     children: list["ParsedEntity"] = field(default_factory=list)
+    relationships: list["Relationship"] = field(default_factory=list)
 
 
 @dataclass

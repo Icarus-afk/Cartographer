@@ -3,7 +3,7 @@ from __future__ import annotations
 import tree_sitter_rust
 from tree_sitter import Language, Node
 
-from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity
+from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity, Relationship
 from cartographer.parser.base import BaseParser
 
 
@@ -138,6 +138,14 @@ class RustParser(BaseParser):
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
 
+        relationships: list[Relationship] = []
+        if trait and type_name:
+            trait_str = self._node_text(trait, source)
+            relationships.append(Relationship(
+                target_name=trait_str,
+                relationship_type="IMPLEMENTS",
+            ))
+
         children: list[ParsedEntity] = []
         body = node.child_by_field_name("body")
         if body:
@@ -153,6 +161,7 @@ class RustParser(BaseParser):
             name=name,
             location=CodeLocation(**loc),
             children=children,
+            relationships=relationships,
         )
 
     def _extract_module(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

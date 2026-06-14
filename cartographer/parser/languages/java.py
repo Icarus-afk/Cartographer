@@ -3,7 +3,7 @@ from __future__ import annotations
 import tree_sitter_java
 from tree_sitter import Language, Node
 
-from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity
+from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity, Relationship
 from cartographer.parser.base import BaseParser
 
 
@@ -43,10 +43,31 @@ class JavaParser(BaseParser):
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
 
+        relationships: list[Relationship] = []
+        superclass = node.child_by_field_name("superclass")
+        if superclass:
+            rel_name = self._node_text(superclass, source)
+            relationships.append(Relationship(
+                target_name=rel_name,
+                relationship_type="INHERITS",
+            ))
+        interfaces = node.child_by_field_name("interfaces")
+        if interfaces:
+            for child in interfaces.children:
+                if child.type in ("type_list",):
+                    for t in child.children:
+                        if t.child_by_field_name("name"):
+                            if_name = self._node_text(t, source)
+                            relationships.append(Relationship(
+                                target_name=if_name,
+                                relationship_type="IMPLEMENTS",
+                            ))
+
         children = self._extract_body(node, source, file_path)
         return ParsedEntity(
             kind=EntityKind.CLASS, name=name,
             location=CodeLocation(**loc), children=children,
+            relationships=relationships,
         )
 
     def _extract_interface(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
@@ -56,9 +77,20 @@ class JavaParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+
+        relationships: list[Relationship] = []
+        superclass = node.child_by_field_name("superclass")
+        if superclass:
+            rel_name = self._node_text(superclass, source)
+            relationships.append(Relationship(
+                target_name=rel_name,
+                relationship_type="INHERITS",
+            ))
+
         return ParsedEntity(
             kind=EntityKind.INTERFACE, name=name,
             location=CodeLocation(**loc),
+            relationships=relationships,
         )
 
     def _extract_enum(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

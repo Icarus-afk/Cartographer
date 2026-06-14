@@ -3,7 +3,7 @@ from __future__ import annotations
 import tree_sitter_javascript
 from tree_sitter import Language, Node
 
-from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity
+from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity, Relationship
 from cartographer.parser.base import BaseParser
 
 
@@ -58,6 +58,15 @@ class JavaScriptParser(BaseParser):
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
 
+        relationships: list[Relationship] = []
+        superclass = node.child_by_field_name("superclass")
+        if superclass:
+            rel_name = self._node_text(superclass, source)
+            relationships.append(Relationship(
+                target_name=rel_name,
+                relationship_type="INHERITS",
+            ))
+
         children: list[ParsedEntity] = []
         body = node.child_by_field_name("body")
         if body:
@@ -71,6 +80,7 @@ class JavaScriptParser(BaseParser):
             name=name,
             location=CodeLocation(**loc),
             children=children,
+            relationships=relationships,
         )
 
     def _parse_class_member(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections import defaultdict
 from pathlib import Path
 
 from cartographer.core.models import EntityKind, ParsedEntity, ParsedFile, RepositoryManifest
@@ -35,6 +36,8 @@ def build_graph(
         "modules": 0,
         "constants": 0,
         "directories": 0,
+        "api_endpoints": 0,
+        "interfaces": 0,
     }
 
     conn.execute(
@@ -60,6 +63,7 @@ def build_graph(
     file_cache: dict[str, int] = {}
     node_rows: list[tuple[int, int, str, str, str, str | None]] = []
     edge_rows: list[tuple[int, int, int, int, str]] = []
+    name_to_entity_ids: dict[str, list[int]] = defaultdict(list)
 
     def _batch_node(kind: EntityKind, name: str, file_path: str, metadata: dict) -> int:
         nonlocal node_idx
@@ -69,6 +73,7 @@ def build_graph(
             actual_id, repo_id, kind.value, name, file_path,
             json.dumps(metadata) if metadata else None,
         ))
+        name_to_entity_ids[name].append(actual_id)
         return actual_id
 
     def _batch_edge(src: int, tgt: int, etype: str) -> None:
@@ -117,6 +122,8 @@ def build_graph(
             if source_id and target_id and source_id != target_id:
                 _batch_edge(source_id, target_id, "IMPORTS")
                 stats["edges"] += 1
+
+    _resolve_relationships(parsed_files, name_to_entity_ids, stats, _batch_edge)
 
     conn.executemany(
         "INSERT INTO nodes (id, repository_id, node_type, name, file_path, metadata_json) "
@@ -195,6 +202,37 @@ def _manifest_to_json(manifest: RepositoryManifest) -> str:
     })
 
 
+def _resolve_relationships(
+    parsed_files: list[ParsedFile],
+    name_to_entity_ids: dict[str, list[int]],
+    stats: GraphStats,
+    batch_edge,
+) -> None:
+    for pf in parsed_files:
+        _resolve_entity_relationships(pf.entities, name_to_entity_ids, stats, batch_edge)
+
+
+def _resolve_entity_relationships(
+    entities: list[ParsedEntity],
+    name_to_entity_ids: dict[str, list[int]],
+    stats: GraphStats,
+    batch_edge,
+) -> None:
+    for entity in entities:
+        for rel in entity.relationships:
+            targets = name_to_entity_ids.get(rel.target_name, [])
+            if len(targets) == 1:
+                tgt_id = targets[0]
+                src_id = name_to_entity_ids.get(entity.name, [])
+                if src_id and src_id[0] != tgt_id:
+                    batch_edge(src_id[0], tgt_id, rel.relationship_type)
+                    stats["edges"] += 1
+        for child in entity.children:
+            _resolve_entity_relationships(
+                [child], name_to_entity_ids, stats, batch_edge,
+            )
+
+
 def _edge_type_for(kind: EntityKind) -> str:
     parent_types = {
         EntityKind.CLASS: "DEFINES",
@@ -204,5 +242,6 @@ def _edge_type_for(kind: EntityKind) -> str:
         EntityKind.VARIABLE: "DECLARES",
         EntityKind.INTERFACE: "DEFINES",
         EntityKind.ENUM: "DEFINES",
+        EntityKind.API_ENDPOINT: "DEFINES",
     }
     return parent_types.get(kind, "CONTAINS")

@@ -3,8 +3,13 @@ from __future__ import annotations
 import tree_sitter_python
 from tree_sitter import Language, Node
 
-from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity
+from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity, Relationship
 from cartographer.parser.base import BaseParser
+
+_API_DECORATORS = (
+    ".route(", ".get(", ".post(", ".put(", ".delete(", ".patch(",
+    ".options(", ".head(", ".trace(",
+)
 
 
 class PythonParser(BaseParser):
@@ -52,24 +57,44 @@ class PythonParser(BaseParser):
         docstring = self._extract_docstring(body, source)
 
         decorator = ""
+        parent = node.parent
+        if parent and parent.type == "decorated_definition":
+            for child in parent.children:
+                if child.type == "decorator":
+                    decorator += self._node_text(child, source) + " "
         for child in node.children:
             if child.type == "decorator":
                 decorator += self._node_text(child, source) + " "
 
         is_property = "@property" in decorator or "@staticmethod" in decorator
+        is_endpoint = any(d in decorator for d in _API_DECORATORS)
 
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
 
+        kind = EntityKind.API_ENDPOINT if is_endpoint else (
+            EntityKind.METHOD if is_property else EntityKind.FUNCTION
+        )
+        meta: dict = {
+            "decorators": decorator.strip(),
+            "parameters": self._extract_params(node, source),
+        }
+        if is_endpoint:
+            meta["endpoint_methods"] = []
+            for d in _API_DECORATORS:
+                if d in decorator:
+                    meta["endpoint_methods"].append(d.strip(".").strip("("))
+
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
+
         return ParsedEntity(
-            kind=EntityKind.FUNCTION if not is_property else EntityKind.METHOD,
+            kind=kind,
             name=name,
             location=CodeLocation(**loc),
             docstring=docstring,
-            metadata={
-                "decorators": decorator.strip(),
-                "parameters": self._extract_params(node, source),
-            },
+            metadata=meta,
+            relationships=relationships,
         )
 
     def _extract_class(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
@@ -81,9 +106,22 @@ class PythonParser(BaseParser):
         docstring = self._extract_docstring(body, source)
 
         bases: list[str] = []
-        superclass = node.child_by_field_name("superclass")
-        if superclass:
-            bases.append(self._node_text(superclass, source))
+        for child in node.children:
+            if child.type == "argument_list":
+                for arg in child.children:
+                    if arg.type == "identifier":
+                        bases.append(self._node_text(arg, source))
+                    elif arg.type == "attribute":
+                        bases.append(self._node_text(arg, source))
+                    elif arg.type == "subscript":
+                        bases.append(self._node_text(arg, source))
+
+        relationships: list[Relationship] = []
+        for b in bases:
+            relationships.append(Relationship(
+                target_name=b.strip(),
+                relationship_type="INHERITS",
+            ))
 
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
@@ -104,6 +142,7 @@ class PythonParser(BaseParser):
             docstring=docstring,
             metadata={"bases": bases},
             children=children,
+            relationships=relationships,
         )
 
     def _extract_decorated(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
@@ -141,3 +180,16 @@ class PythonParser(BaseParser):
             for p in params.children
             if p.type == "identifier"
         ]
+
+    def _extract_calls(self, node: Node, source: bytes, relationships: list[Relationship]) -> None:
+        if node.type == "call":
+            func = node.child_by_field_name("function")
+            if func:
+                name = self._node_text(func, source)
+                if "." not in name and " " not in name:
+                    relationships.append(Relationship(
+                        target_name=name,
+                        relationship_type="CALLS",
+                    ))
+        for child in node.children:
+            self._extract_calls(child, source, relationships)
