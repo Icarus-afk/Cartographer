@@ -8,6 +8,9 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from cartographer.compression.engine import estimate_tokens
+from cartographer.git.engine import (
+    co_change_analysis, get_node_history, list_authors, why_introduced,
+)
 from cartographer.retrieval.searcher import search_nodes
 from cartographer.retrieval.summarizer import generate_summary
 from cartographer.retrieval.traversal import find_path, impact_analysis
@@ -247,12 +250,73 @@ def _build_search(intent, db_path, repo, limit, max_tokens):
     return _search_step(intent["targets"][0], db_path, repo, limit)
 
 
+def _build_git_blame(intent, db_path, repo, limit, max_tokens):
+    targets = intent.get("targets", [])
+    if not targets:
+        authors = list_authors(db_path, repo_name=repo, limit=limit)
+        if not authors:
+            return "No authors found."
+        lines = ["Authors:"]
+        for a in authors:
+            lines.append(f"  {a['name']} ({a['email']}) — {a['commit_count']} commits")
+        return "\n".join(lines)
+
+    target = targets[0]
+    history = get_node_history(db_path, target, repo_name=repo, limit=limit)
+    if not history:
+        return f"No history found for '{target}'."
+    lines = [f"History of '{target}':"]
+    for h in history:
+        lines.append(f"  {h['committed_at']} | {h['author']} | {h['message']}")
+    return "\n".join(lines)
+
+
+def _build_git_why(intent, db_path, repo, limit, max_tokens):
+    targets = intent.get("targets", [])
+    if not targets:
+        return "What do you want to know about?"
+    result = why_introduced(db_path, targets[0], repo_name=repo)
+    if not result:
+        return f"Could not determine why '{targets[0]}' was introduced."
+    return (
+        f"'{result['target']}' ({result['file_path']}) "
+        f"was introduced in commit {result['introduced_in'][:8]} "
+        f"by {result['by']} on {result['committed_at']}:\n"
+        f"  {result['message']}"
+    )
+
+
+def _build_git_cochange(intent, db_path, repo, limit, max_tokens):
+    targets = intent.get("targets", [])
+    if not targets:
+        return "What file do you want to analyze?"
+    from cartographer.retrieval.traversal import _resolve_target
+    from cartographer.storage.connection import get_connection
+
+    conn = get_connection(db_path)
+    node = _resolve_target(conn, targets[0], repo)
+    conn.close()
+    if not node or not node.get("file_path"):
+        return f"Could not find '{targets[0]}'."
+
+    changes = co_change_analysis(db_path, node["file_path"], repo_name=repo, limit=limit)
+    if not changes:
+        return f"No co-changes found for '{targets[0]}'."
+    lines = [f"Files that change with '{targets[0]}':"]
+    for c in changes:
+        lines.append(f"  {c['file_path']} ({c['co_occurrences']} times)")
+    return "\n".join(lines)
+
+
 PLAN_BUILDERS: dict[str, Any] = {
     "summarize": _build_summarize,
     "explain": _build_explain,
     "impact": _build_impact,
     "path": _build_path,
     "architecture": _build_architecture,
+    "git_blame": _build_git_blame,
+    "git_why": _build_git_why,
+    "git_cochange": _build_git_cochange,
     "search": _build_search,
 }
 

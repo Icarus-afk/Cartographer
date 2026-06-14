@@ -14,6 +14,41 @@ logger = logging.getLogger(__name__)
 GraphStats = dict
 
 
+_CLASSIFIER_SUFFIXES: dict[str, EntityKind] = {
+    "Controller": EntityKind.CONTROLLER,
+    "Service": EntityKind.SERVICE,
+    "Middleware": EntityKind.MIDDLEWARE,
+    "Repository": EntityKind.REPOSITORY_LAYER,
+    "Repo": EntityKind.REPOSITORY_LAYER,
+    "DAO": EntityKind.REPOSITORY_LAYER,
+    "Job": EntityKind.JOB,
+    "Worker": EntityKind.WORKER,
+    "Queue": EntityKind.QUEUE,
+}
+
+
+def _reclassify_entity(entity: ParsedEntity) -> None:
+    if entity.kind != EntityKind.CLASS:
+        return
+    name = entity.name
+    for suffix, target_kind in _CLASSIFIER_SUFFIXES.items():
+        if name.endswith(suffix):
+            entity.kind = target_kind
+            break
+
+
+def _reclassify_entities(parsed_files: list[ParsedFile]) -> None:
+    for pf in parsed_files:
+        for entity in pf.entities:
+            _reclassify_tree(entity)
+
+
+def _reclassify_tree(entity: ParsedEntity) -> None:
+    _reclassify_entity(entity)
+    for child in entity.children:
+        _reclassify_tree(child)
+
+
 def build_graph(
     db_path: Path,
     repo_path: str,
@@ -21,6 +56,8 @@ def build_graph(
     references: list[dict] | None = None,
     manifest: RepositoryManifest | None = None,
 ) -> GraphStats:
+    _reclassify_entities(parsed_files)
+
     conn = get_connection(db_path)
     init_schema(conn)
 
@@ -38,6 +75,13 @@ def build_graph(
         "directories": 0,
         "api_endpoints": 0,
         "interfaces": 0,
+        "controllers": 0,
+        "services": 0,
+        "middleware": 0,
+        "repositories": 0,
+        "jobs": 0,
+        "workers": 0,
+        "queues": 0,
     }
 
     conn.execute(

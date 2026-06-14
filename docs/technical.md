@@ -655,11 +655,20 @@ Each detection produces a confidence score (0.0–1.0) based on:
 
 ### Search (`searcher.py`)
 
-SQL-based fuzzy search across all nodes:
+SQL-based fuzzy search across all nodes with multi-factor relevance scoring:
 - Matches against `name` (primary) and `file_path` (secondary)
 - Optional filter by `node_type` and `repo_name`
 - Uses SQL `LIKE` with `%` wildcards
-- Returns results sorted by relevance (exact > prefix > contains > path)
+
+**Relevance Scoring** combines 4 factors (configurable weights):
+| Factor | Weight | Description |
+|---|---|---|
+| **Name match** | 50% | Exact (1.0) > prefix (0.8) > substring (0.5) > word match (0.3-0.5) > none (0.1) |
+| **Node type** | 20% | API endpoints and controllers score highest; files/directories lower |
+| **Reference count** | 20% | Log-normalized count of incoming edges (popularity signal) |
+| **File depth** | 10% | Shallower files in the hierarchy are scored higher (1/sqrt(depth)) |
+
+Results are sorted by descending score, then alphabetically by name.
 
 ### Impact Analysis (`traversal.py`)
 
@@ -882,6 +891,8 @@ Semantic: SIMILAR_TO, RELATED_TO, DUPLICATES, PATTERN_MATCH
 ```
 
 **Implemented (extracted at parse/build time):** CONTAINS, DEFINES, DECLARES, IMPORTS, **CALLS** (same-file function calls via tree-sitter AST walk), **INHERITS** (class base/superclass extraction), **IMPLEMENTS** (Java `implements`, Rust `impl Trait for Type`).
+
+**Entity Reclassification:** At build time, CLASS entities with naming suffixes are promoted to more specific types: `*Controller` → CONTROLLER, `*Service` → SERVICE, `*Middleware` → MIDDLEWARE, `*Repository`/`*Repo`/`*DAO` → REPOSITORY_LAYER, `*Job` → JOB, `*Worker` → WORKER, `*Queue` → QUEUE.
 
 ---
 
