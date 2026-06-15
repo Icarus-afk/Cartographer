@@ -76,47 +76,47 @@ Cartographer is a **Repository Intelligence Operating System** — a layered sys
 | **IMPLEMENTS** | Class implements interface | `class UserService` IMPLEMENTS `interface IUserService` |
 | **DECLARES** | Method/block declares variable | `method login()` DECLARES `token` |
 
+### 2.3 Knowledge Graph Example
+
+A fully typed graph connecting files, classes, functions, and their relationships:
+
+```mermaid
+graph LR
+    subgraph "Example Knowledge Graph"
+        F1["auth_service.py"] -->|CONTAINS| C1["class AuthService"]
+        C1 -->|DEFINES| M1["def login()"]
+        C1 -->|DEFINES| M2["def logout()"]
+        C1 -->|IMPLEMENTS| I1["interface IAuthService"]
+        F2["user_model.py"] -->|CONTAINS| C2["class User"]
+        C2 -->|DEFINES| M3["def get_name()"]
+        F1 -->|IMPORTS| F2
+        M1 -->|CALLS| M3
+        F3["middleware.py"] -->|CONTAINS| F4["auth_middleware()"]
+        F4 -->|CALLS| M1
+    end
+```
+
+Each node has a type (file, class, function, interface) and each edge has a typed label. This structure enables path queries (`path "middleware" "User"`), impact analysis (`impact "auth_service.py"`), and semantic search (`similar "login"`).
+
 ---
 
 ## 3. Architecture
 
 Cartographer's pipeline is modular, with 10 engines connected in sequence:
 
-```
-Source Code
-    │
-    ▼
-┌─────────────────┐
-│ Ingestion Engine │  ← File discovery, language detection, .gitignore
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│  Parser Engine   │  ← 19 Tree-sitter parsers, fault-tolerant
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│   Graph Engine   │  ← SQLite persistence, typed edges
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ Retrieval Engine │  ← Search, traversal, impact, path, summarize
-└────────┬────────┘
-         ▼
-┌─────────────────────┐
-│ Architecture Engine  │  ← Layer/pattern/framework detection
-├─────────────────────┤
-│ Embedding Engine     │  ← ONNX + bge-small, numpy-batched similarity
-├─────────────────────┤
-│ Git Intelligence     │  ← Commit tracking, blame, co-change
-├─────────────────────┤
-│ Compression Engine   │  ← Token-budget-aware output truncation
-├─────────────────────┤
-│   Query Planner     │  ← NL intent classification (9 types)
-├─────────────────────┤
-│    MCP Server       │  ← 8 tools, 3 resources for AI assistants
-└─────────────────────┘
-         ▼
-    CLI / VS Code / OpenCode / Claude Desktop
+```mermaid
+flowchart TB
+    SC["Source Code"] --> IE["Ingestion Engine<br/>File discovery, .gitignore,<br/>language detection"]
+    IE --> PE["Parser Engine<br/>19 Tree-sitter parsers<br/>200+ query patterns"]
+    PE --> GE["Graph Engine<br/>SQLite persistence<br/>Typed edges, batch writes"]
+    GE --> RE["Retrieval Engine<br/>Search, traversal<br/>Impact, path, summarize"]
+    RE --> AE["Architecture Engine<br/>Layer & pattern detection<br/>Framework fingerprinting"]
+    RE --> EE["Embedding Engine<br/>ONNX + bge-small-v1.5<br/>384-dim, numpy batch"]
+    RE --> GI["Git Intelligence<br/>Commits, blame<br/>Co-change analysis"]
+    RE --> CE["Compression Engine<br/>Token-budget-aware<br/>4 strategies"]
+    RE --> QP["Query Planner<br/>NL intent classification<br/>9 intent types"]
+    RE --> MCP["MCP Server<br/>8 tools, 3 resources<br/>Auto-discovery"]
+    MCP --> CLI["CLI / VS Code Extension / OpenCode / Claude Desktop"]
 ```
 
 ### 3.1 Indexing Pipeline Detail
@@ -130,6 +130,31 @@ Source Code
 7. **Schema extraction**: Detect DB schemas from ORM models and raw SQL strings
 
 Total pipeline runs in a single process with `ThreadPoolExecutor` (max 2 workers) — no forking, no CPU overload.
+
+```mermaid
+sequenceDiagram
+    participant FS as File System
+    participant IE as Ingestion Engine
+    participant PE as Parser Engine
+    participant RE as Reference Extractor
+    participant GE as Graph Engine
+    participant DB as SQLite DB
+
+    IE->>FS: Walk directory tree
+    IE->>IE: Apply .gitignore + .cartographerignore
+    IE->>IE: Skip binaries (extension whitelist + null-byte check)
+    IE->>IE: Detect languages & frameworks
+    IE->>PE: Submit files for parsing
+    par Parallel (2 workers)
+        PE->>PE: Parse with Tree-sitter (19 languages)
+        PE->>PE: Extract entities via language queries (~200 patterns)
+    end
+    PE->>RE: Send parsed entities
+    RE->>RE: Resolve cross-file imports
+    RE->>GE: Submit nodes + edges
+    GE->>DB: Batch write transactions
+    GE->>GE: Extract DB schemas from ORM models
+```
 
 ---
 
@@ -176,6 +201,14 @@ Benchmarks run on Linux x86_64, Intel, SSD. Cartographer version 0.1.0.
 | cats | 836 | 6,383ms | 131 | 9,204 | 1,442 | 9,884 |
 | TS project | 1,633 | 4,400ms | 371 | 10,662 | 2,423 | 11,452 |
 | **Total/Avg** | **4,579** | **52,911ms** | **86.5 avg** | **37,517** | **709 avg** | **47,410** |
+
+```mermaid
+xychart-beta
+    title "Indexing Throughput by Language"
+    x-axis ["PHP", "Ruby", "TS/TSX", "Go", "C#", "Scala", "Python", "C++", "Java", "C"]
+    y-axis "Files/second" 0 --> 400
+    bar [252, 242, 371, 118, 172, 131, 84, 104, 60, 26]
+```
 
 **Key observations:**
 - PHP and Ruby parse the fastest (>240 files/s)
@@ -285,6 +318,15 @@ Agent: Calls cartographer search "auth" → 200 tokens
 | **"Similar to Z"** | Search by name convention (imprecise, many false positives) | `similar Z` (300 tokens) | **~95%** |
 | **Who wrote this?** | git log + blame (1K tokens) | `git blame` (200 tokens) | **80%** |
 
+```mermaid
+xychart-beta
+    title "Token Consumption: Without vs With Cartographer (K tokens)"
+    x-axis ["Repo Onboarding", "Explain Feature X", "Find Dependents of Y", "Architecture Overview", "5-Turn Session"]
+    y-axis "Tokens (K)" 0 --> 100
+    bar [60, 6, 12, 15, 100]
+    bar [0.7, 0.5, 0.3, 0.5, 4]
+```
+
 **Aggregate savings for a typical 5-turn assistant session:**
 - Without Cartographer: ~100K tokens ($0.50 GPT-4)
 - With Cartographer: ~4K tokens ($0.02 GPT-4)
@@ -316,6 +358,32 @@ Resources:
   cartographer://repos        — List all indexed repositories
   cartographer://repo/{name}  — Repository summary with counts
   cartographer://node/{id}    — Single node with full details
+```
+
+A typical agent interaction flows through the MCP server:
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as AI Agent (LLM)
+    participant M as MCP Server
+    participant C as Cartographer Core
+    participant G as Knowledge Graph
+
+    U->>A: "How does auth work?"
+    A->>M: search("auth", type="class")
+    M->>C: Route to CLI search
+    C->>G: SQL query: type='class' AND name LIKE '%auth%'
+    G-->>C: AuthService, AuthMiddleware, AuthController
+    C-->>M: Structured JSON result (200 tokens)
+    M-->>A: Tool response
+    A->>M: impact("AuthService")
+    M->>C: Impact analysis
+    C->>G: Traverse IMPORTS, CALLS edges
+    G-->>C: 14 dependents across 6 files
+    C-->>M: Impact report (300 tokens)
+    M-->>A: Tool response
+    A-->>U: "Auth system has 3 classes, 14 callers across 6 files..."
 ```
 
 The server is configured via `opencode.json`:
