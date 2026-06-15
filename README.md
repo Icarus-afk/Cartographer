@@ -224,13 +224,14 @@ Cartographer has a modular pipeline architecture:
 ## Documentation
 
 | Document | Description |
-|---|---|
+|---|---|---|
 | [Getting Started](docs/getting-started.md) | Installation, first index, quick start workflows |
 | [Command Reference](docs/commands.md) | All commands, options, and examples |
 | [Architecture Deep Dive](docs/architecture.md) | How the system works internally |
 | [Technical Reference](docs/technical.md) | Comprehensive technical architecture |
 | [OpenCode Integration](docs/opencode.md) | Using Cartographer with AI coding assistants |
 | [Benchmarks](docs/benchmarks.md) | Performance data across 14 real-world repos |
+| [Whitepaper](docs/whitepaper.md) | Full technical whitepaper with benchmarks and token savings analysis |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
 
 ---
