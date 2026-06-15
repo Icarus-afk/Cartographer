@@ -1,6 +1,8 @@
 # OpenCode Integration
 
-Cartographer is designed to work as a knowledge-graph provider for AI coding assistants like OpenCode. This guide covers integration patterns, agent configuration, and best practices.
+Cartographer is a **Repository Intelligence Operating System** that transforms any codebase into a persistent, queryable knowledge graph. Within seconds of indexing, every class, function, method, interface, file, and directory becomes a first-class node connected by typed edges (CONTAINS, DEFINES, IMPORTS, CALLS, INHERITS, IMPLEMENTS, DECLARES). The graph lives in a portable SQLite database (~310 bytes/node) and supports semantic search, architecture detection, git intelligence, and token-aware compression.
+
+This guide covers integration patterns, agent configuration, and best practices for using Cartographer with AI coding assistants like OpenCode.
 
 ---
 

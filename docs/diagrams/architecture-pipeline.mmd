@@ -1,0 +1,13 @@
+graph LR
+    subgraph "Example Knowledge Graph"
+        F1["auth_service.py"] -->|CONTAINS| C1["class AuthService"]
+        C1 -->|DEFINES| M1["def login()"]
+        C1 -->|DEFINES| M2["def logout()"]
+        C1 -->|IMPLEMENTS| I1["interface IAuthService"]
+        F2["user_model.py"] -->|CONTAINS| C2["class User"]
+        C2 -->|DEFINES| M3["def get_name()"]
+        F1 -->|IMPORTS| F2
+        M1 -->|CALLS| M3
+        F3["middleware.py"] -->|CONTAINS| F4["auth_middleware()"]
+        F4 -->|CALLS| M1
+    end

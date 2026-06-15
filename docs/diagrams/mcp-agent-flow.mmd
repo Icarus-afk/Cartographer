@@ -1,0 +1,21 @@
+sequenceDiagram
+    participant U as User
+    participant A as AI Agent (LLM)
+    participant M as MCP Server
+    participant C as Cartographer Core
+    participant G as Knowledge Graph
+
+    U->>A: "How does auth work?"
+    A->>M: search("auth", type="class")
+    M->>C: Route to CLI search
+    C->>G: SQL query: type='class' AND name LIKE '%auth%'
+    G-->>C: AuthService, AuthMiddleware, AuthController
+    C-->>M: Structured JSON result (200 tokens)
+    M-->>A: Tool response
+    A->>M: impact("AuthService")
+    M->>C: Impact analysis
+    C->>G: Traverse IMPORTS, CALLS edges
+    G-->>C: 14 dependents across 6 files
+    C-->>M: Impact report (300 tokens)
+    M-->>A: Tool response
+    A-->>U: "Auth system has 3 classes, 14 callers across 6 files..."

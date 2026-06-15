@@ -1,0 +1,22 @@
+sequenceDiagram
+    participant FS as File System
+    participant IE as Ingestion Engine
+    participant PE as Parser Engine
+    participant RE as Reference Extractor
+    participant GE as Graph Engine
+    participant DB as SQLite DB
+
+    IE->>FS: Walk directory tree
+    IE->>IE: Apply .gitignore + .cartographerignore
+    IE->>IE: Skip binaries (extension whitelist + null-byte check)
+    IE->>IE: Detect languages & frameworks
+    IE->>PE: Submit files for parsing
+    par Parallel (2 workers)
+        PE->>PE: Parse with Tree-sitter (19 languages)
+        PE->>PE: Extract entities via language queries (~200 patterns)
+    end
+    PE->>RE: Send parsed entities
+    RE->>RE: Resolve cross-file imports
+    RE->>GE: Submit nodes + edges
+    GE->>DB: Batch write transactions
+    GE->>GE: Extract DB schemas from ORM models

@@ -1,0 +1,12 @@
+flowchart TB
+    SC["Source Code"] --> IE["Ingestion Engine<br/>File discovery, .gitignore,<br/>language detection"]
+    IE --> PE["Parser Engine<br/>19 Tree-sitter parsers<br/>200+ query patterns"]
+    PE --> GE["Graph Engine<br/>SQLite persistence<br/>Typed edges, batch writes"]
+    GE --> RE["Retrieval Engine<br/>Search, traversal<br/>Impact, path, summarize"]
+    RE --> AE["Architecture Engine<br/>Layer & pattern detection<br/>Framework fingerprinting"]
+    RE --> EE["Embedding Engine<br/>ONNX + bge-small-v1.5<br/>384-dim, numpy batch"]
+    RE --> GI["Git Intelligence<br/>Commits, blame<br/>Co-change analysis"]
+    RE --> CE["Compression Engine<br/>Token-budget-aware<br/>4 strategies"]
+    RE --> QP["Query Planner<br/>NL intent classification<br/>9 intent types"]
+    RE --> MCP["MCP Server<br/>8 tools, 3 resources<br/>Auto-discovery"]
+    MCP --> CLI["CLI / VS Code Extension / OpenCode / Claude Desktop"]
