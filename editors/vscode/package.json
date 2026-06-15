@@ -1,48 +1,59 @@
 {
   "name": "cartographer",
   "displayName": "Cartographer",
-  "description": "Repository intelligence — explore code as a knowledge graph",
+  "description": "Repository intelligence — explore any codebase as a navigable knowledge graph",
   "version": "0.1.0",
   "publisher": "cartographer",
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
-  "categories": ["Programming Languages", "Visualization", "Other"],
+  "categories": ["Programming Languages", "Visualization", "Debuggers"],
   "repository": { "type": "git", "url": "https://github.com/anomalyco/cartographer" },
-  "activationEvents": [
-    "onStartupFinished"
-  ],
+  "icon": "",
+  "activationEvents": ["onLanguage:plaintext", "onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      {
-        "command": "cartographer.index",
-        "title": "Cartographer: Index Repository"
-      },
-      {
-        "command": "cartographer.search",
-        "title": "Cartographer: Search Graph"
-      },
-      {
-        "command": "cartographer.summarize",
-        "title": "Cartographer: Show Repository Summary"
-      },
-      {
-        "command": "cartographer.architecture",
-        "title": "Cartographer: Show Architecture"
-      },
-      {
-        "command": "cartographer.impact",
-        "title": "Cartographer: Impact Analysis"
-      },
-      {
-        "command": "cartographer.graph",
-        "title": "Cartographer: Open Graph View"
-      },
-      {
-        "command": "cartographer.refresh",
-        "title": "Cartographer: Refresh Views"
-      }
+      { "command": "cartographer.index", "title": "Cartographer: Index Repository", "icon": "$(database)" },
+      { "command": "cartographer.search", "title": "Cartographer: Search Graph", "icon": "$(search)" },
+      { "command": "cartographer.ask", "title": "Cartographer: Ask a Question", "icon": "$(question)" },
+      { "command": "cartographer.summarize", "title": "Cartographer: Repository Summary", "icon": "$(report)" },
+      { "command": "cartographer.architecture", "title": "Cartographer: Detect Architecture", "icon": "$(layers)" },
+      { "command": "cartographer.impact", "title": "Cartographer: Impact Analysis", "icon": "$(warning)" },
+      { "command": "cartographer.neighbors", "title": "Cartographer: Show Neighbors", "icon": "$(expand)" },
+      { "command": "cartographer.path", "title": "Cartographer: Find Path Between Nodes", "icon": "$(symbol-method)" },
+      { "command": "cartographer.similar", "title": "Cartographer: Similar Entities", "icon": "$(files)" },
+      { "command": "cartographer.embed", "title": "Cartographer: Generate Embeddings", "icon": "$(wand)" },
+      { "command": "cartographer.graph", "title": "Cartographer: Open Graph Visualization", "icon": "$(graph)" },
+      { "command": "cartographer.gitIndex", "title": "Cartographer: Index Git History", "icon": "$(git-commit)" },
+      { "command": "cartographer.openDb", "title": "Cartographer: Select Database", "icon": "$(folder-opened)" },
+      { "command": "cartographer.refresh", "title": "Cartographer: Refresh Views", "icon": "$(refresh)" }
     ],
+    "keybindings": [
+      { "key": "ctrl+shift+c i", "command": "cartographer.index" },
+      { "key": "ctrl+shift+c s", "command": "cartographer.search" },
+      { "key": "ctrl+shift+c a", "command": "cartographer.ask" },
+      { "key": "ctrl+shift+c g", "command": "cartographer.graph" }
+    ],
+    "configuration": {
+      "title": "Cartographer",
+      "properties": {
+        "cartographer.dbPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to Cartographer SQLite database (default: ~/.cartographer/index.db)"
+        },
+        "cartographer.binPath": {
+          "type": "string",
+          "default": "cartographer",
+          "description": "Path to cartographer CLI binary"
+        },
+        "cartographer.maxResults": {
+          "type": "integer",
+          "default": 20,
+          "description": "Default max results for search/query"
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         { "id": "cartographer", "title": "Cartographer", "icon": "resources/icon.svg" }
@@ -50,35 +61,46 @@
     },
     "views": {
       "cartographer": [
-        { "id": "cartographer.repos", "name": "Repositories" },
-        { "id": "cartographer.search", "name": "Search Results" }
+        { "id": "cartographer.repos", "name": "Repository", "icon": "$(repo)" },
+        { "id": "cartographer.entities", "name": "Entities by Type", "icon": "$(symbol-class)" },
+        { "id": "cartographer.search", "name": "Search Results", "icon": "$(search)" }
       ]
     },
     "menus": {
+      "commandPalette": [
+        { "command": "cartographer.index", "when": "workspaceFolderCount > 0" },
+        { "command": "cartographer.search" },
+        { "command": "cartographer.ask" },
+        { "command": "cartographer.summarize" },
+        { "command": "cartographer.architecture" },
+        { "command": "cartographer.impact" },
+        { "command": "cartographer.graph" },
+        { "command": "cartographer.graphEntityType" },
+        { "command": "cartographer.embed" }
+      ],
       "view/title": [
-        {
-          "command": "cartographer.index",
-          "when": "view == cartographer.repos",
-          "group": "navigation"
-        },
-        {
-          "command": "cartographer.refresh",
-          "when": "view == cartographer.repos",
-          "group": "navigation"
-        }
+        { "command": "cartographer.index", "when": "view == cartographer.repos", "group": "navigation" },
+        { "command": "cartographer.search", "when": "view == cartographer.search", "group": "navigation" },
+        { "command": "cartographer.refresh", "when": "view == cartographer.repos", "group": "navigation@5" }
+      ],
+      "view/item/context": [
+        { "command": "cartographer.graphEntityType", "when": "view == cartographer.entities && viewItem == entityType", "group": "inline" },
+        { "command": "cartographer.graph", "when": "view == cartographer.repos", "group": "inline" }
+      ],
+      "editor/context": [
+        { "command": "cartographer.search", "when": "editorHasSelection", "group": "cartographer@1" },
+        { "command": "cartographer.impact", "when": "editorHasSelection", "group": "cartographer@2" }
       ]
     }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "lint": "eslint src/"
+    "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",
     "@types/node": "^20.0.0",
-    "typescript": "^5.3.0",
-    "eslint": "^8.50.0"
+    "typescript": "^5.3.0"
   }
 }
