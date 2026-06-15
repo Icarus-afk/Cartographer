@@ -62,7 +62,9 @@ export function activate(ctx: vscode.ExtensionContext): void {
     ctx.subscriptions.push(vscode.commands.registerCommand(id, fn));
   }
 
-  // Hover provider: show node info on code hover
+  // Hover provider: show node info on code hover (debounced + cached)
+  let hoverTimer: NodeJS.Timeout | undefined;
+  const hoverCache = new Map<string, { results: SearchResult[]; time: number }>();
   ctx.subscriptions.push(
     vscode.languages.registerHoverProvider("*", {
       provideHover(document, position) {
@@ -70,22 +72,38 @@ export function activate(ctx: vscode.ExtensionContext): void {
         if (!range) return null;
         const word = document.getText(range);
         if (!word || word.length < 2) return null;
-        // Quick lookup via search
-        try {
-          const results = client.search(word);
-          if (results.length > 0) {
-            const lines = results.slice(0, 5).map(r =>
-              `[${r.type}] **${r.name}**${r.file_path ? ` — ${r.file_path}` : ""}`
-            );
-            return new vscode.Hover(new vscode.MarkdownString(
-              "**Cartographer**\n\n" + lines.join("\n") + "\n\n---\n_Click search for more_"
-            ));
+        // Check cache (1 min TTL)
+        const cached = hoverCache.get(word);
+        if (cached && Date.now() - cached.time < 60000) {
+          if (cached.results.length > 0) {
+            return formatHover(cached.results);
           }
-        } catch { /* ignore */ }
-        return null;
+          return null;
+        }
+        // Debounce: don't search on every mouse movement
+        return new Promise<vscode.Hover | null | undefined>(resolve => {
+          if (hoverTimer) clearTimeout(hoverTimer);
+          hoverTimer = setTimeout(() => {
+            try {
+              const results = client.search(word);
+              hoverCache.set(word, { results, time: Date.now() });
+              resolve(results.length > 0 ? formatHover(results) : null);
+            } catch {
+              resolve(null);
+            }
+          }, 300);
+        });
       },
     }),
   );
+
+  // Trim cache every 5 min
+  setInterval(() => {
+    const cutoff = Date.now() - 120000;
+    for (const [k, v] of hoverCache) {
+      if (v.time < cutoff) hoverCache.delete(k);
+    }
+  }, 300000);
 
   // Selection-based search context menu
   ctx.subscriptions.push(
@@ -127,6 +145,15 @@ function withProgress<T>(title: string, fn: () => T): Thenable<T> {
   );
 }
 
+function formatHover(results: SearchResult[]): vscode.Hover {
+  const lines = results.slice(0, 5).map(r =>
+    `[${r.type}] **${r.name}**${r.file_path ? ` — ${r.file_path}` : ""}`
+  );
+  return new vscode.Hover(new vscode.MarkdownString(
+    "**Cartographer**\n\n" + lines.join("\n") + "\n\n---\n_Click search for more_"
+  ));
+}
+
 function showOutput(title: string, text: string): void {
   const ch = vscode.window.createOutputChannel(title);
   ch.clear();
@@ -152,7 +179,7 @@ function cmdIndex(): void {
     } else {
       const msg = r.errors[0]?.replace(/^Error:\s*/, "") || "Index command failed";
       vscode.window.showErrorMessage(`Cartographer index failed: ${msg}`);
-      // Show full output in output channel
+      // Show error details in the Cartographer output channel
       const ch = vscode.window.createOutputChannel("Cartographer Index");
       ch.clear();
       ch.appendLine(r.errors.join("\n"));

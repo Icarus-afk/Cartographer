@@ -87,7 +87,6 @@ export class EntityItem extends vscode.TreeItem {
       title: "Search by Type",
       arguments: [entityType],
     };
-    this.contextValue = "entityType";
   }
 }
 
@@ -111,13 +110,13 @@ export class EntityTreeProvider implements vscode.TreeDataProvider<EntityItem> {
   getTreeItem(el: EntityItem): vscode.TreeItem { return el; }
 
   getChildren(): Thenable<EntityItem[]> {
-    const gd = this.client.getGraphData(1, this._repoName);
-    if (!gd.node_types || Object.keys(gd.node_types).length === 0) {
+    const s = this.client.summarize(this._repoName);
+    if (!s?.node_breakdown || Object.keys(s.node_breakdown).length === 0) {
       return Promise.resolve([
         new EntityItem("No data", 0, "", vscode.TreeItemCollapsibleState.None),
       ]);
     }
-    const items = Object.entries(gd.node_types)
+    const items = Object.entries(s.node_breakdown)
       .sort((a, b) => b[1] - a[1])
       .map(([type, count]) => new EntityItem(type, count, type, vscode.TreeItemCollapsibleState.None));
     return Promise.resolve(items);

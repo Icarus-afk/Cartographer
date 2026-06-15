@@ -11,10 +11,6 @@ const COLORS: Record<string, string> = {
 
 const DEFAULT_COLOR = "#90a4ae";
 
-function typeColor(t: string): string {
-  return COLORS[t.toLowerCase()] || DEFAULT_COLOR;
-}
-
 export function createGraphWebview(client: CartographerClient, entityType?: string, repoName?: string): vscode.WebviewPanel {
   const panel = vscode.window.createWebviewPanel(
     "cartographer.graph", entityType ? `Graph: ${entityType}s` : "Cartographer Graph",
@@ -131,6 +127,8 @@ function getHtml(gd: GraphData, entityType?: string): string {
 </div>
 
 <script>
+const COLORS = ${JSON.stringify(COLORS)};
+const DEFAULT_COLOR = "#90a4ae";
 const nodes = ${nodesJson};
 const links = ${edgesJson};
 
@@ -163,7 +161,7 @@ const node = g.append('g')
     .join('circle')
     .attr('class', 'node')
     .attr('r', d => Math.max(3, Math.min(12, 30 / Math.sqrt(nodes.length / 5 + 1))))
-    .attr('fill', d => ${COLORS_MAP})
+    .attr('fill', d => COLORS[d.type] || DEFAULT_COLOR)
     .call(d3.drag()
         .on('start', (e, d) => { if (!e.active) sim.alphaTarget(.3).restart(); d.fx = d.x; d.fy = d.y; })
         .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
@@ -180,7 +178,7 @@ const node = g.append('g')
         if (d.file_path) {
             e.stopPropagation();
             // Dispatch to VS Code
-            window.parent.postMessage({ command: 'openFile', path: d.file_path }, '*');
+            window.parent.postMessage({ command: 'openFile', path: d.file_path }, window.origin);
         }
     });
 
@@ -237,8 +235,3 @@ function filterNodes(q) {
 </html>`;
 }
 
-// Need COLORS_MAP for inline script — handle via function
-const COLORS_MAP = Object.entries(COLORS).reduce((acc, [k, v]) => {
-  acc += `d.type === '${k}' ? '${v}' : `;
-  return acc;
-}, "") + `'${DEFAULT_COLOR}'`;
