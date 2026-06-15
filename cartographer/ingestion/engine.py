@@ -1,6 +1,7 @@
 import logging
+import os
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from cartographer.core.models import IngestionResult, Language, ParsedFile, RepositoryManifest
@@ -36,7 +37,9 @@ def index_repository(
     errors: list[str] = []
 
     try:
+        logger.info("Discovering files in %s...", root)
         files = discover_files(root)
+        logger.info("Found %d files", len(files))
     except Exception as e:
         return IngestionResult(
             path=str(root),
@@ -45,6 +48,7 @@ def index_repository(
             errors=[f"File discovery failed: {e}"],
         )
 
+    logger.info("Detecting project metadata...")
     lang_counts = detect_languages(files)
     package_managers = detect_package_managers(root)
     build_systems = detect_build_systems(root)
@@ -77,12 +81,15 @@ def index_repository(
 
         if parsed_files:
             try:
+                logger.info("Extracting cross-file references...")
                 references = extract_references(root, parsed_files, files)
+                logger.info("Found %d references", len(references))
             except Exception as e:
                 errors.append(f"Reference extraction failed: {e}")
 
         if parsed_files:
             try:
+                logger.info("Extracting schema...")
                 extract_schema(parsed_files, files, root)
             except Exception as e:
                 errors.append(f"Schema extraction failed: {e}")
@@ -93,8 +100,11 @@ def index_repository(
             db_path_obj = Path(db_path)
         manifest.total_references = len(references)
         try:
+            logger.info("Building knowledge graph...")
             stats = build_graph(db_path_obj, str(root), parsed_files, references, manifest)
             manifest.total_files = stats.get("files", len(files))
+            logger.info("Graph built: %d nodes, %d edges",
+                        stats.get("nodes", 0), stats.get("edges", 0))
         except Exception as e:
             errors.append(f"Graph build failed: {e}")
 
@@ -145,10 +155,20 @@ def _parse_repository(
 
     work = [(f, root, ext_map) for f in files]
     parsed_files: list[ParsedFile] = []
+    total = len(work)
 
-    with ProcessPoolExecutor() as executor:
+    # ThreadPoolExecutor avoids forking N processes that peg all CPU cores.
+    # GIL serializes CPU-bound parsing, keeping the machine responsive.
+    max_workers = min(os.cpu_count() or 2, 2)
+    logger.info("Parsing %d files with %d workers...", total, max_workers)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_parse_single_file, args): args for args in work}
+        done = 0
         for future in as_completed(futures):
+            done += 1
+            if done % max(1, total // 10) == 0 or done == total:
+                logger.info("  parsed %d/%d files...", done, total)
             try:
                 pf, parse_errors = future.result()
                 if pf:
@@ -157,6 +177,7 @@ def _parse_repository(
             except Exception as e:
                 errors.append(f"Parse worker failed: {e}")
 
+    logger.info("Parsing complete: %d/%d files parsed", len(parsed_files), total)
     return parsed_files
 
 

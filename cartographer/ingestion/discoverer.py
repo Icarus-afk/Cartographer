@@ -9,6 +9,14 @@ import pathspec
 
 from cartographer.core.models import LANGUAGE_EXTENSIONS, Language
 
+TEXT_EXTENSIONS = {
+    ".md", ".txt", ".rst", ".json", ".yaml", ".yml", ".toml",
+    ".cfg", ".ini", ".conf", ".sh", ".bash", ".zsh", ".fish",
+    ".env", ".gitignore", ".dockerignore", ".editorconfig",
+    ".sql", ".graphql", ".css", ".scss", ".less", ".html", ".xml",
+    ".svg", ".lock", ".gradle", ".properties",
+} | set(LANGUAGE_EXTENSIONS.keys())
+
 logger = logging.getLogger(__name__)
 
 IGNORED_DIRS = {
@@ -61,8 +69,11 @@ def _load_gitignore_spec(root: Path) -> pathspec.PathSpec | None:
 
 
 def _is_binary(path: Path) -> bool:
-    if path.suffix.lower() in BINARY_EXTENSIONS:
+    ext = path.suffix.lower()
+    if ext in BINARY_EXTENSIONS:
         return True
+    if ext in TEXT_EXTENSIONS:
+        return False
     try:
         with open(path, "rb") as f:
             head = f.read(8192)

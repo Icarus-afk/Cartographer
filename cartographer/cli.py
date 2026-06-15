@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import logging
+import sys
 from pathlib import Path
 
 import click
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    stream=sys.stderr,
+)
 
 from cartographer.architecture.engine import detect_architecture, get_architecture
 from cartographer.compression.engine import build_context_package, compress
@@ -661,6 +669,57 @@ def git_authors(ctx, repo, limit):
     click.echo("Authors (by commit count):")
     for a in authors:
         click.echo(f"  {a['name']} <{a['email']}> — {a['commit_count']} commits")
+
+
+@main.command(name="graph-data")
+@click.option("--repo", "-r", help="Repository name")
+@click.option("--limit", "-l", default=80, help="Max nodes to sample")
+@click.pass_context
+def graph_data(ctx, repo, limit):
+    """Output graph data as JSON for the VS Code extension."""
+    import json
+    from cartographer.storage.connection import get_connection
+    conn = get_connection(ctx.obj["db_path"])
+
+    if repo:
+        row = conn.execute("SELECT id FROM repositories WHERE name = ?", (repo,)).fetchone()
+    else:
+        row = conn.execute("SELECT id FROM repositories ORDER BY id DESC LIMIT 1").fetchone()
+
+    if not row:
+        click.echo(json.dumps({"error": "Repository not found"}))
+        return
+
+    repo_id = row[0]
+    type_counts = conn.execute(
+        "SELECT node_type, COUNT(*) as cnt FROM nodes WHERE repository_id = ? GROUP BY node_type ORDER BY cnt DESC",
+        (repo_id,),
+    ).fetchall()
+
+    nodes = conn.execute(
+        """SELECT id, name, node_type, file_path FROM nodes
+           WHERE repository_id = ?
+           ORDER BY RANDOM() LIMIT ?""",
+        (repo_id, limit),
+    ).fetchall()
+
+    node_ids = [n[0] for n in nodes]
+    edges = []
+    if node_ids:
+        placeholders = ",".join("?" for _ in node_ids)
+        edges = conn.execute(
+            f"""SELECT source_node_id, target_node_id, edge_type FROM edges
+                WHERE repository_id = ? AND source_node_id IN ({placeholders})
+                AND target_node_id IN ({placeholders})""",
+            (repo_id, *node_ids, *node_ids),
+        ).fetchall()
+
+    conn.close()
+    click.echo(json.dumps({
+        "node_types": {r[0]: r[1] for r in type_counts},
+        "nodes": [{"id": n[0], "name": n[1], "type": n[2], "file_path": n[3]} for n in nodes],
+        "edges": [{"source": e[0], "target": e[1], "type": e[2]} for e in edges],
+    }))
 
 
 def _get_repo(ctx) -> tuple[str, str] | None:
