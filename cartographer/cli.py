@@ -691,16 +691,21 @@ def graph_data(ctx, repo, limit):
         return
 
     repo_id = row[0]
+
     type_counts = conn.execute(
         "SELECT node_type, COUNT(*) as cnt FROM nodes WHERE repository_id = ? GROUP BY node_type ORDER BY cnt DESC",
         (repo_id,),
     ).fetchall()
 
+    # Sample nodes by degree (most connected first) so the graph shows edges
     nodes = conn.execute(
-        """SELECT id, name, node_type, file_path FROM nodes
-           WHERE repository_id = ?
-           ORDER BY RANDOM() LIMIT ?""",
-        (repo_id, limit),
+        """SELECT n.id, n.name, n.node_type, n.file_path
+           FROM nodes n
+           WHERE n.repository_id = ?
+           ORDER BY (SELECT COUNT(*) FROM edges WHERE repository_id = ?
+                     AND (source_node_id = n.id OR target_node_id = n.id)) DESC, RANDOM()
+           LIMIT ?""",
+        (repo_id, repo_id, limit),
     ).fetchall()
 
     node_ids = [n[0] for n in nodes]
@@ -714,8 +719,17 @@ def graph_data(ctx, repo, limit):
             (repo_id, *node_ids, *node_ids),
         ).fetchall()
 
+    total_nodes = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE repository_id = ?", (repo_id,)
+    ).fetchone()[0]
+    total_edges = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE repository_id = ?", (repo_id,)
+    ).fetchone()[0]
+
     conn.close()
     click.echo(json.dumps({
+        "total_nodes": total_nodes,
+        "total_edges": total_edges,
         "node_types": {r[0]: r[1] for r in type_counts},
         "nodes": [{"id": n[0], "name": n[1], "type": n[2], "file_path": n[3]} for n in nodes],
         "edges": [{"source": e[0], "target": e[1], "type": e[2]} for e in edges],
