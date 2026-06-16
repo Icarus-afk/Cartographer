@@ -1,3 +1,10 @@
+# Cartographer local data (DB, temp files)
+/.cartographer/
+
+# Generated doc artifacts
+docs/diagrams/
+docs/whitepaper-with-images.*
+
 # Internal documentation
 docs/internal/
 
