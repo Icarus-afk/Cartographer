@@ -81,6 +81,12 @@ def index_commits(
             fl = fl.strip()
             if not fl:
                 continue
+            # Handle rename entries: R<similarity>\t<old>\t<new>
+            rename_match = re.match(r"^R\d+\t(.+)\t(.+)$", fl)
+            if rename_match:
+                changed_files.append(("A", rename_match.group(2)))
+                changed_files.append(("D", rename_match.group(1)))
+                continue
             match = re.match(r"^([AMDR])\s+(.+)$", fl)
             if match:
                 change_type = match.group(1)
@@ -347,18 +353,34 @@ def why_introduced(
     if not node or not node["file_path"]:
         return None
 
-    history = get_file_history(db_path, node["file_path"], repo_path, repo_name, limit=1)
-    if not history:
+    # Query the oldest commit for this file (the one that introduced it)
+    repo_id = _get_repo_id(conn, repo_path, repo_name)
+    if not repo_id:
+        conn.close()
         return None
 
-    entry = history[0]
+    conn = get_connection(db_path)
+    row = conn.execute(
+        """SELECT c.hash, c.author, c.message, c.committed_at, cf.change_type
+           FROM commits c
+           JOIN commit_files cf ON c.id = cf.commit_id
+           WHERE c.repository_id = ? AND cf.file_path = ?
+           ORDER BY c.committed_at ASC
+           LIMIT 1""",
+        (repo_id, node["file_path"]),
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
     return {
         "target": target,
         "file_path": node["file_path"],
-        "introduced_in": entry["hash"],
-        "by": entry["author"],
-        "message": entry["message"],
-        "committed_at": entry["committed_at"],
+        "introduced_in": row[0],
+        "by": row[1],
+        "message": row[2],
+        "committed_at": row[3],
     }
 
 
