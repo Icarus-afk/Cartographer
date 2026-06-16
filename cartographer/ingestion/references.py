@@ -207,6 +207,111 @@ def _build_suffix_index(files: set[str]) -> dict[str, set[str]]:
     return idx
 
 
+def _handle_relative_import(import_str: str, source_dir: str) -> list[str]:
+    resolved_dir = source_dir
+    dots = 0
+    while dots < len(import_str) and import_str[dots] == ".":
+        dots += 1
+    for _ in range(dots - 1):
+        if resolved_dir:
+            resolved_dir = "/".join(resolved_dir.split("/")[:-1])
+    rest = import_str[dots:]
+    if rest:
+        rest = rest.replace(".", "/")
+        return [f"{resolved_dir}/{rest}"] if resolved_dir else [rest]
+    return [resolved_dir] if resolved_dir else []
+
+
+def _handle_rust_import(import_str: str, source_dir: str) -> list[str]:
+    paths: list[str] = []
+    if import_str.startswith("crate::"):
+        rest = import_str[7:].replace("::", "/")
+        paths.append(f"src/{rest}")
+        paths.append(rest)
+    elif import_str.startswith("super::"):
+        rest = import_str[7:].replace("::", "/")
+        paths.append(rest)
+    elif import_str.startswith("self::"):
+        rest = import_str[6:].replace("::", "/")
+        paths.append(rest)
+    else:
+        path_like = import_str.replace("::", "/")
+        paths.append(path_like)
+        segments = path_like.split("/", 1)
+        if len(segments) >= 2:
+            paths.append(segments[1])
+            module_parts = segments[1].split("/")
+            for i in range(1, len(module_parts)):
+                paths.append("/".join(module_parts[:i]))
+        paths.append(f"src/{path_like}")
+        for crate_dir in _find_all_crate_roots(source_dir):
+            module_part = segments[1] if len(segments) >= 2 else path_like
+            paths.append(f"{crate_dir}/src/{module_part}")
+            module_segments = module_part.split("/")
+            for i in range(1, len(module_segments)):
+                paths.append(f"{crate_dir}/src/{'/'.join(module_segments[:i])}")
+    return paths
+
+
+def _handle_default_import(import_str: str) -> list[str]:
+    paths = [import_str]
+    dotted_path = _dotted_to_path(import_str)
+    if dotted_path != import_str:
+        paths.append(dotted_path)
+    return paths
+
+
+def _match_candidates(
+    base: str,
+    exts: list[str],
+    mod_indicators: list[str],
+    all_files: set[str],
+    suffix_index: dict[str, set[str]],
+    candidates: set[str],
+) -> None:
+    base = base.strip("/")
+    for ext in exts:
+        candidate = f"{base}{ext}"
+        if candidate in all_files:
+            candidates.add(candidate)
+        else:
+            suffix = f"/{base}{ext}"
+            candidates.update(_lookup(suffix, suffix_index))
+        if not candidates and "/" in base:
+            last_part = base.rsplit("/", 1)[-1]
+            last_candidate = f"{last_part}{ext}"
+            if last_candidate in all_files:
+                candidates.add(last_candidate)
+            else:
+                last_suffix = f"/{last_part}{ext}"
+                candidates.update(_lookup(last_suffix, suffix_index))
+
+    for indicator in mod_indicators:
+        candidate = f"{base}/{indicator}"
+        if candidate in all_files:
+            candidates.add(candidate)
+        else:
+            suffix = f"/{base}/{indicator}"
+            candidates.update(_lookup(suffix, suffix_index))
+
+    if base in all_files:
+        candidates.add(base)
+    elif not candidates:
+        candidates.update(_lookup(base, suffix_index))
+    if not candidates and "/" not in base and "." not in base:
+        for indicator in mod_indicators:
+            dir_candidate = f"{base}/{indicator}"
+            if dir_candidate in all_files:
+                candidates.add(dir_candidate)
+            else:
+                dir_suffix = f"/{dir_candidate}"
+                candidates.update(_lookup(dir_suffix, suffix_index))
+
+
+def _lookup(key: str, suffix_index: dict[str, set[str]]) -> set[str]:
+    return suffix_index.get(key, set()) | (suffix_index.get(key.lower(), set()) if key != key.lower() else set())
+
+
 def _candidates_for_import(
     import_str: str,
     source_lang: str,
@@ -218,101 +323,16 @@ def _candidates_for_import(
     candidates: set[str] = set()
     exts = ext_map.get(source_lang, [".py"])
     mod_indicators = MODULE_INDICATORS.get(source_lang, [])
-    possible_paths = []
 
     if import_str.startswith("."):
-        resolved_dir = source_dir
-        dots = 0
-        while dots < len(import_str) and import_str[dots] == ".":
-            dots += 1
-        for _ in range(dots - 1):
-            if resolved_dir:
-                resolved_dir = "/".join(resolved_dir.split("/")[:-1])
-        rest = import_str[dots:]
-        if rest:
-            rest = rest.replace(".", "/")
-            base = f"{resolved_dir}/{rest}" if resolved_dir else rest
-            possible_paths.append(base)
-        else:
-            if resolved_dir:
-                possible_paths.append(resolved_dir)
+        possible_paths = _handle_relative_import(import_str, source_dir)
     elif source_lang == "rust":
-        if import_str.startswith("crate::"):
-            rest = import_str[7:].replace("::", "/")
-            possible_paths.append(f"src/{rest}")
-            possible_paths.append(rest)
-        elif import_str.startswith("super::"):
-            rest = import_str[7:].replace("::", "/")
-            possible_paths.append(rest)
-        elif import_str.startswith("self::"):
-            rest = import_str[6:].replace("::", "/")
-            possible_paths.append(rest)
-        else:
-            path_like = import_str.replace("::", "/")
-            possible_paths.append(path_like)
-            segments = path_like.split("/", 1)
-            if len(segments) >= 2:
-                possible_paths.append(segments[1])
-                module_parts = segments[1].split("/")
-                for i in range(1, len(module_parts)):
-                    possible_paths.append("/".join(module_parts[:i]))
-            possible_paths.append(f"src/{path_like}")
-            for crate_dir in _find_all_crate_roots(source_dir):
-                module_part = segments[1] if len(segments) >= 2 else path_like
-                possible_paths.append(f"{crate_dir}/src/{module_part}")
-                module_segments = module_part.split("/")
-                for i in range(1, len(module_segments)):
-                    possible_paths.append(f"{crate_dir}/src/{'/'.join(module_segments[:i])}")
-                for crate_rel in ("src",):
-                    for candidate_dir in _find_all_crate_roots(source_dir):
-                        possible_paths.append(f"{candidate_dir}/{crate_rel}/{path_like}")
+        possible_paths = _handle_rust_import(import_str, source_dir)
     else:
-        possible_paths.append(import_str)
-        dotted_path = _dotted_to_path(import_str)
-        if dotted_path != import_str:
-            possible_paths.append(dotted_path)
-
-    def _lookup(key: str) -> set[str]:
-        return suffix_index.get(key, set()) | (suffix_index.get(key.lower(), set()) if key != key.lower() else set())
+        possible_paths = _handle_default_import(import_str)
 
     for base in possible_paths:
-        base = base.strip("/")
-        for ext in exts:
-            candidate = f"{base}{ext}"
-            if candidate in all_files:
-                candidates.add(candidate)
-            else:
-                suffix = f"/{base}{ext}"
-                candidates.update(_lookup(suffix))
-            if not candidates and "/" in base:
-                last_part = base.rsplit("/", 1)[-1]
-                last_candidate = f"{last_part}{ext}"
-                if last_candidate in all_files:
-                    candidates.add(last_candidate)
-                else:
-                    last_suffix = f"/{last_part}{ext}"
-                    candidates.update(_lookup(last_suffix))
-
-        for indicator in mod_indicators:
-            candidate = f"{base}/{indicator}"
-            if candidate in all_files:
-                candidates.add(candidate)
-            else:
-                suffix = f"/{base}/{indicator}"
-                candidates.update(_lookup(suffix))
-
-        if base in all_files:
-            candidates.add(base)
-        elif not candidates:
-            candidates.update(_lookup(base))
-        if not candidates and "/" not in base and "." not in base:
-            for indicator in mod_indicators:
-                dir_candidate = f"{base}/{indicator}"
-                if dir_candidate in all_files:
-                    candidates.add(dir_candidate)
-                else:
-                    dir_suffix = f"/{dir_candidate}"
-                    candidates.update(_lookup(dir_suffix))
+        _match_candidates(base, exts, mod_indicators, all_files, suffix_index, candidates)
 
     return candidates
 

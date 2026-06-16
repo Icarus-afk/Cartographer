@@ -25,6 +25,10 @@ def _read_cached(path: Path) -> str | None:
         _FILE_READ_CACHE[key] = None
         return None
 
+
+def _clear_file_read_cache() -> None:
+    _FILE_READ_CACHE.clear()
+
 FRAMEWORK_RULES: list[dict[str, Any]] = [
     {
         "name": "Django",

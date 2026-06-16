@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
-
-logger = logging.getLogger(__name__)
 
 
 def estimate_tokens(text: str) -> int:
@@ -26,9 +23,9 @@ def compress_nodes(
     for n in nodes:
         t = n.get("type", "unknown")
         type_counts[t] = type_counts.get(t, 0) + 1
-        fp = n.get("file_path") or ""
-        if fp:
-            file_counts.setdefault(fp, []).append(n.get("name", "?"))
+        file_path = n.get("file_path") or ""
+        if file_path:
+            file_counts.setdefault(file_path, []).append(n.get("name", "?"))
 
     parts: list[str] = []
     parts.append(f"Found {len(nodes)} result(s):")
@@ -39,9 +36,9 @@ def compress_nodes(
         budget_left = budget - estimate_tokens("\n".join(parts))
         if budget_left > 20 and file_counts:
             file_parts = []
-            for fp in list(file_counts.keys())[:max(1, budget_left // 30)]:
-                names = file_counts[fp]
-                file_parts.append(f"  {fp} ({len(names)} entities)")
+            for fpath in list(file_counts.keys())[:max(1, budget_left // 30)]:
+                names = file_counts[fpath]
+                file_parts.append(f"  {fpath} ({len(names)} entities)")
             if file_parts:
                 parts.append("  Files:")
                 parts.extend(file_parts)
@@ -49,8 +46,9 @@ def compress_nodes(
         for n in nodes:
             type_label = n.get("type", "?").ljust(12)
             line = f"  [{type_label}] {n.get('name', '?')}"
-            if n.get("file_path"):
-                line += f" ({n['file_path']})"
+            fp = n.get("file_path")
+            if fp:
+                line += f" ({fp})"
             parts.append(line)
 
     result = "\n".join(parts)
@@ -79,8 +77,9 @@ def compress_impact(
             break
         for n in nodes[:max(1, (max_tokens - estimate_tokens("\n".join(parts))) // 40)]:
             parts.append(f"    [{n.get('type', '?')}] {n.get('name', '?')}")
-            if n.get("file_path"):
-                parts[-1] += f" ({n['file_path']})"
+            file_path = n.get("file_path")
+            if file_path:
+                parts[-1] += f" ({file_path})"
 
     return _truncate_lines(parts, max_tokens, "  ...")
 
@@ -99,8 +98,9 @@ def compress_path(
             break
         arrow = " → " if r.get("depth", 0) > 0 else "   "
         line = f"  {arrow}[{r.get('type', '?')}] {r.get('name', '?')}"
-        if r.get("file_path"):
-            line += f" ({r['file_path']})"
+        file_path = r.get("file_path")
+        if file_path:
+            line += f" ({file_path})"
         parts.append(line)
 
     return "\n".join(parts)
@@ -137,10 +137,11 @@ def compress_summary(
         if items:
             parts.append(f"  {label}:")
             for item in items[:max(1, (max_tokens - estimate_tokens("\n".join(parts))) // 25)]:
+                item_name = item.get("name", "?")
                 if "entities" in item:
-                    parts.append(f"    {item['name']} ({item['entities']} entities)")
+                    parts.append(f"    {item_name} ({item['entities']} entities)")
                 elif "methods" in item:
-                    parts.append(f"    {item['name']} ({item['methods']} methods)")
+                    parts.append(f"    {item_name} ({item['methods']} methods)")
 
     return _truncate_lines(parts, max_tokens, "  ...")
 
@@ -172,14 +173,17 @@ def compress_architecture(
     if patterns:
         parts.append("  Patterns:")
         for p in patterns[:4]:
-            parts.append(f"    {p['name']} (confidence={p['confidence']})")
+            parts.append(f"    {p.get('name', '?')} (confidence={p.get('confidence', 0)})")
 
     domains = arch.get("domains", [])
     if domains:
         parts.append("  Domains:")
         for d in domains[:5]:
-            cnf = d['confidence']
-            parts.append(f"    {d['name']} (type={d['type']}, conf={cnf}, files={d['file_count']})")
+            d_name = d.get("name", "?")
+            d_type = d.get("type", "?")
+            d_conf = d.get("confidence", 0)
+            d_files = d.get("file_count", 0)
+            parts.append(f"    {d_name} (type={d_type}, conf={d_conf}, files={d_files})")
 
     return _truncate_lines(parts, max_tokens, "  ...")
 

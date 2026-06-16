@@ -110,7 +110,7 @@ def index_repository(
 
     elapsed = (time.perf_counter() - start) * 1000
 
-    fatal_errors = [e for e in errors if not e.startswith("Parse errors")]
+    fatal_errors = [e for e in errors if not e.startswith("Parse error")]
     return IngestionResult(
         path=str(root),
         manifest=manifest,
@@ -119,6 +119,33 @@ def index_repository(
         errors=errors,
         duration_ms=round(elapsed, 2),
     )
+
+
+
+_LANG_EXTENSIONS: dict[Language, tuple[str, ...]] = {
+    Language.PYTHON: (".py",),
+    Language.JAVASCRIPT: (".js", ".jsx", ".mjs", ".cjs"),
+    Language.TYPESCRIPT: (".ts",),
+    Language.TSX: (".tsx",),
+    Language.GO: (".go",),
+    Language.RUST: (".rs",),
+    Language.JAVA: (".java",),
+    Language.KOTLIN: (".kt", ".kts"),
+    Language.CSHARP: (".cs",),
+    Language.PHP: (".php", ".phtml"),
+    Language.RUBY: (".rb",),
+    Language.C: (".c", ".h"),
+    Language.CPP: (".cpp", ".hpp", ".cc", ".cxx"),
+    Language.SWIFT: (".swift",),
+    Language.SCALA: (".scala", ".sc"),
+    Language.ELIXIR: (".ex", ".exs"),
+    Language.LUA: (".lua",),
+    Language.JULIA: (".jl",),
+    Language.ZIG: (".zig",),
+    Language.GROOVY: (".groovy", ".gvy", ".gsh"),
+}
+
+LANGUAGE_EXTENSIONS: dict[Language, tuple[str, ...]] = _LANG_EXTENSIONS
 
 
 def _parse_single_file(args: tuple[Path, Path, dict[Language, tuple[str, ...]]]) -> tuple[ParsedFile | None, list[str]]:
@@ -150,8 +177,9 @@ def _parse_repository(
     root: Path,
     errors: list[str],
 ) -> list[ParsedFile]:
-    ext_map = {lang: exts for lang, exts in LANGUAGE_EXTENSION_MAP_REVERSE.items()
-               if lang in supported_languages()}
+    supported = set(supported_languages())
+    ext_map = {lang: exts for lang, exts in LANGUAGE_EXTENSIONS.items()
+               if lang in supported}
 
     work = [(f, root, ext_map) for f in files]
     parsed_files: list[ParsedFile] = []
@@ -179,29 +207,3 @@ def _parse_repository(
 
     logger.info("Parsing complete: %d/%d files parsed", len(parsed_files), total)
     return parsed_files
-
-
-_LANG_EXTENSIONS: dict[Language, tuple[str, ...]] = {
-    Language.PYTHON: (".py",),
-    Language.JAVASCRIPT: (".js", ".jsx", ".mjs", ".cjs"),
-    Language.TYPESCRIPT: (".ts",),
-    Language.TSX: (".tsx",),
-    Language.GO: (".go",),
-    Language.RUST: (".rs",),
-    Language.JAVA: (".java",),
-    Language.KOTLIN: (".kt", ".kts"),
-    Language.CSHARP: (".cs",),
-    Language.PHP: (".php", ".phtml"),
-    Language.RUBY: (".rb",),
-    Language.C: (".c", ".h"),
-    Language.CPP: (".cpp", ".hpp", ".cc", ".cxx"),
-    Language.SWIFT: (".swift",),
-    Language.SCALA: (".scala", ".sc"),
-    Language.ELIXIR: (".ex", ".exs"),
-    Language.LUA: (".lua",),
-    Language.JULIA: (".jl",),
-    Language.ZIG: (".zig",),
-    Language.GROOVY: (".groovy", ".gvy", ".gsh"),
-}
-
-LANGUAGE_EXTENSION_MAP_REVERSE: dict[Language, tuple[str, ...]] = _LANG_EXTENSIONS
