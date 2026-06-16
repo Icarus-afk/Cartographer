@@ -9,19 +9,40 @@ const COLORS: Record<string, string> = {
   directory: "#bdbdbd",
 };
 
-const DEFAULT_COLOR = "#90a4ae";
+const EDGE_COLORS: Record<string, string> = {
+  CONTAINS: "#888",
+  DEFINES: "#4fc3f7",
+  IMPORTS: "#ffb74d",
+  DECLARES: "#81c784",
+  EXTENDS: "#ce93d8",
+  IMPLEMENTS: "#4dd0e1",
+  CALLS: "#ef5350",
+  REFERENCES: "#a1887f",
+};
 
-export function createGraphWebview(client: CartographerClient, entityType?: string, repoName?: string): vscode.WebviewPanel {
+const DEFAULT_COLOR = "#90a4ae";
+const DEFAULT_EDGE_COLOR = "#888";
+
+export function createGraphWebview(
+  client: CartographerClient,
+  extensionUri: vscode.Uri,
+  entityType?: string,
+  repoName?: string,
+): vscode.WebviewPanel {
   const panel = vscode.window.createWebviewPanel(
     "cartographer.graph", entityType ? `Graph: ${entityType}s` : "Cartographer Graph",
     vscode.ViewColumn.Beside,
-    { enableScripts: true, retainContextWhenHidden: true },
+    { enableScripts: true, retainContextWhenHidden: true,
+      localResourceRoots: [vscode.Uri.joinPath(extensionUri, "resources")] },
   );
 
-  const gd = entityType
-    ? getGraphDataFiltered(client, entityType, repoName)
-    : client.getGraphData(400, repoName);
-  panel.webview.html = getHtml(gd, entityType);
+  const limit = client.cfg("graphLimit", 400);
+  (async () => {
+    const gd = entityType
+      ? await getGraphDataFiltered(client, entityType, repoName, limit)
+      : await client.getGraphData(limit, repoName);
+    panel.webview.html = getHtml(gd, entityType, panel.webview, extensionUri);
+  })();
 
   panel.webview.onDidReceiveMessage(msg => {
     if (msg.command === "alert") vscode.window.showErrorMessage(msg.text);
@@ -34,15 +55,15 @@ export function createGraphWebview(client: CartographerClient, entityType?: stri
   return panel;
 }
 
-function getGraphDataFiltered(client: CartographerClient, entityType: string, repoName?: string): GraphData {
-  const all = client.getGraphData(300, repoName);
+async function getGraphDataFiltered(client: CartographerClient, entityType: string, repoName: string | undefined, limit: number): Promise<GraphData> {
+  const all = await client.getGraphData(limit, repoName);
   const filtered = all.nodes.filter(n => n.type === entityType);
   const ids = new Set(filtered.map(n => n.id));
   const edges = all.edges.filter(e => ids.has(e.source) && ids.has(e.target));
   return { nodes: filtered, edges, node_types: { [entityType]: all.node_types[entityType] || filtered.length }, total_nodes: all.total_nodes, total_edges: all.total_edges };
 }
 
-function getHtml(gd: GraphData, entityType?: string): string {
+function getHtml(gd: GraphData, entityType: string | undefined, webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const typeEntries = Object.entries(gd.node_types || {}).sort((a, b) => b[1] - a[1]);
   const typeRows = typeEntries.map(([t, c]) =>
     `<div class="stat"><span>${t}</span><span class="val">${c}</span></div>`
@@ -50,6 +71,7 @@ function getHtml(gd: GraphData, entityType?: string): string {
 
   const nodesJson = JSON.stringify(gd.nodes);
   const edgesJson = JSON.stringify(gd.edges);
+  const d3Uri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "resources", "d3.v7.min.js"));
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -57,7 +79,7 @@ function getHtml(gd: GraphData, entityType?: string): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cartographer Graph</title>
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="${d3Uri}"></script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
@@ -83,6 +105,8 @@ function getHtml(gd: GraphData, entityType?: string): string {
   .legend { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
   .legend-item { display:flex; align-items:center; gap:3px; font-size:10px; }
   .legend-dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+  .edge-legend-item { display:flex; align-items:center; gap:3px; font-size:10px; }
+  .edge-legend-line { width:12px; height:3px; display:inline-block; border-radius:1px; }
   .actions { margin-top:12px; display:flex; flex-direction:column; gap:4px; }
   .actions button { background:var(--vscode-button-background); color:var(--vscode-button-foreground);
                     border:none; padding:6px 12px; border-radius:3px; cursor:pointer; font-size:12px; }
@@ -91,7 +115,7 @@ function getHtml(gd: GraphData, entityType?: string): string {
   #searchBox { width:100%; padding:6px 8px; border:1px solid var(--vscode-input-border);
                background:var(--vscode-input-background); color:var(--vscode-input-foreground);
                border-radius:3px; font-size:12px; margin-bottom:8px; }
-  .link { stroke-opacity:.3; }
+  .link { stroke-opacity:.4; }
   .node { cursor:pointer; stroke:#fff; stroke-width:1.5; }
   .node:hover { stroke-width:3; }
   .label { font-size:10px; pointer-events:none; fill:var(--vscode-editor-foreground);
@@ -108,16 +132,24 @@ function getHtml(gd: GraphData, entityType?: string): string {
     <h3>Node Types</h3>
     ${typeRows || '<div style="font-size:12px;color:var(--vscode-descriptionForeground)">Index a repo first</div>'}
 
-    <h3>Legend</h3>
+    <h3>Legend: Nodes</h3>
     <div class="legend">
       ${Object.entries(COLORS).slice(0, 10).map(([t, c]) =>
         `<span class="legend-item"><span class="legend-dot" style="background:${c}"></span>${t}</span>`
       ).join("")}
     </div>
 
+    <h3>Legend: Edges</h3>
+    <div class="legend">
+      ${Object.entries(EDGE_COLORS).slice(0, 8).map(([t, c]) =>
+        `<span class="edge-legend-item"><span class="edge-legend-line" style="background:${c}"></span>${t}</span>`
+      ).join("")}
+    </div>
+
     <div class="actions">
       <button onclick="resetZoom()">Reset View</button>
       <button onclick="runLayout()">Re-layout</button>
+      <button onclick="clusterByDir()">Cluster by Directory</button>
     </div>
   </div>
   <div id="graph">
@@ -128,9 +160,16 @@ function getHtml(gd: GraphData, entityType?: string): string {
 
 <script>
 const COLORS = ${JSON.stringify(COLORS)};
+const EDGE_COLORS = ${JSON.stringify(EDGE_COLORS)};
 const DEFAULT_COLOR = "#90a4ae";
+const DEFAULT_EDGE_COLOR = "#888";
 const nodes = ${nodesJson};
 const links = ${edgesJson};
+
+// Compute degree for each node
+const degree = {};
+nodes.forEach(n => degree[n.id] = 0);
+links.forEach(e => { degree[e.source] = (degree[e.source] || 0) + 1; degree[e.target] = (degree[e.target] || 0) + 1; });
 
 const width = document.getElementById('graph').clientWidth;
 const height = document.getElementById('graph').clientHeight;
@@ -151,16 +190,23 @@ const link = g.append('g')
     .data(links)
     .join('line')
     .attr('class', 'link')
-    .attr('stroke', '#888')
+    .attr('stroke', d => EDGE_COLORS[d.type] || DEFAULT_EDGE_COLOR)
     .attr('stroke-width', 1)
-    .attr('stroke-opacity', 0.6);
+    .attr('stroke-opacity', 0.4);
+
+const maxDegree = Math.max(1, ...Object.values(degree));
+const minR = 3;
+const maxR = 14;
 
 const node = g.append('g')
     .selectAll('circle')
     .data(nodes)
     .join('circle')
     .attr('class', 'node')
-    .attr('r', d => Math.max(3, Math.min(12, 30 / Math.sqrt(nodes.length / 5 + 1))))
+    .attr('r', d => {
+        const deg = degree[d.id] || 0;
+        return minR + (maxR - minR) * Math.sqrt(deg / maxDegree);
+    })
     .attr('fill', d => COLORS[d.type] || DEFAULT_COLOR)
     .call(d3.drag()
         .on('start', (e, d) => { if (!e.active) sim.alphaTarget(.3).restart(); d.fx = d.x; d.fy = d.y; })
@@ -168,8 +214,9 @@ const node = g.append('g')
         .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; })
     )
     .on('mouseenter', (e, d) => {
+        const deg = degree[d.id] || 0;
         tooltip.style('opacity', 1)
-            .html(\`<div class="tt-name">\${d.name}</div><div class="tt-type">[\${d.type}]</div>\${d.file_path ? '<br>' + d.file_path : ''}\`)
+            .html(\`<div class="tt-name">\${d.name}</div><div class="tt-type">[\${d.type}] degree: \${deg}</div>\${d.file_path ? '<br>' + d.file_path : ''}\`)
             .style('left', (e.offsetX + 12) + 'px')
             .style('top', (e.offsetY - 10) + 'px');
     })
@@ -177,26 +224,36 @@ const node = g.append('g')
     .on('click', (e, d) => {
         if (d.file_path) {
             e.stopPropagation();
-            // Dispatch to VS Code
             window.parent.postMessage({ command: 'openFile', path: d.file_path }, window.origin);
         }
     });
 
-// Labels (only show for higher-degree nodes)
+// Smart labels: show for top 40 nodes by degree
+const topLabelNodes = [...nodes]
+    .sort((a, b) => (degree[b.id] || 0) - (degree[a.id] || 0))
+    .slice(0, 40);
+const topLabelIds = new Set(topLabelNodes.map(n => n.id));
+
 const label = g.append('g')
     .selectAll('text')
-    .data(nodes.filter(d => nodes.length < 80))
+    .data(nodes.filter(d => topLabelIds.has(d.id)))
     .join('text')
     .attr('class', 'label')
-    .attr('dx', d => Math.max(3, Math.min(12, 30 / Math.sqrt(nodes.length / 5 + 1))) + 3)
+    .attr('dx', d => {
+        const deg = degree[d.id] || 0;
+        return minR + (maxR - minR) * Math.sqrt(deg / maxDegree) + 3;
+    })
     .attr('dy', 3)
-    .text(d => d.name.length > 20 ? d.name.slice(0, 17) + '...' : d.name);
+    .text(d => d.name.length > 25 ? d.name.slice(0, 22) + '...' : d.name);
 
 const sim = d3.forceSimulation(nodes)
     .force('link', d3.forceLink(links).id(d => d.id).distance(50))
     .force('charge', d3.forceManyBody().strength(-100))
     .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collision', d3.forceCollide().radius(8))
+    .force('collision', d3.forceCollide().radius(d => {
+        const deg = degree[d.id] || 0;
+        return minR + (maxR - minR) * Math.sqrt(deg / maxDegree) + 2;
+    }))
     .on('tick', () => {
         link
             .attr('x1', d => d.source.x)
@@ -219,14 +276,39 @@ function runLayout() {
     sim.alpha(1).restart();
 }
 
+function clusterByDir() {
+    const dirPositions = {};
+    const dirs = [...new Set(nodes.map(n => {
+        const fp = n.file_path || '';
+        return fp.split('/').slice(0, -1).join('/') || '/';
+    }))].sort();
+    const cols = Math.ceil(Math.sqrt(dirs.length));
+    dirs.forEach((dir, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        dirPositions[dir] = { x: (col + 0.5) * 200, y: (row + 0.5) * 200 };
+    });
+    nodes.forEach(n => {
+        const fp = n.file_path || '';
+        const dir = fp.split('/').slice(0, -1).join('/') || '/';
+        const pos = dirPositions[dir] || { x: width / 2, y: height / 2 };
+        n.fx = pos.x + (Math.random() - 0.5) * 50;
+        n.fy = pos.y + (Math.random() - 0.5) * 50;
+    });
+    sim.alpha(1).restart();
+    setTimeout(() => {
+        nodes.forEach(n => { n.fx = null; n.fy = null; });
+    }, 3000);
+}
+
 function filterNodes(q) {
     const lower = q.toLowerCase();
     node.attr('opacity', d => !q || d.name.toLowerCase().includes(lower) || d.type.toLowerCase().includes(lower) ? 1 : 0.1);
     link.attr('opacity', d => {
-        if (!q) return 0.3;
+        if (!q) return 0.4;
         const src = d.source.name?.toLowerCase().includes(lower);
         const tgt = d.target.name?.toLowerCase().includes(lower);
-        return src || tgt ? 0.5 : 0.02;
+        return src || tgt ? 0.6 : 0.02;
     });
     label.attr('opacity', d => !q || d.name.toLowerCase().includes(lower) ? 1 : 0);
 }
@@ -234,4 +316,3 @@ function filterNodes(q) {
 </body>
 </html>`;
 }
-

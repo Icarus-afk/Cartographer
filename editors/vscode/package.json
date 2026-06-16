@@ -51,6 +51,16 @@
           "type": "integer",
           "default": 20,
           "description": "Default max results for search/query"
+        },
+        "cartographer.autoReindex": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto re-index the graph when files are saved"
+        },
+        "cartographer.graphLimit": {
+          "type": "integer",
+          "default": 400,
+          "description": "Max nodes to display in the graph visualization (higher values may be slower)"
         }
       }
     },

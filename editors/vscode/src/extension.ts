@@ -17,10 +17,6 @@ export function activate(ctx: vscode.ExtensionContext): void {
   repoTree = new RepoTreeProvider(client);
   entityTree = new EntityTreeProvider(client);
   searchTree = new SearchTreeProvider();
-  // Sync entity tree to workspace repo on startup
-  const wsName = vscode.workspace.workspaceFolders?.[0]?.name;
-  if (wsName) entityTree.setRepo(wsName);
-
   ctx.subscriptions.push(
     vscode.window.registerTreeDataProvider("cartographer.repos", repoTree),
     vscode.window.registerTreeDataProvider("cartographer.entities", entityTree),
@@ -35,11 +31,10 @@ export function activate(ctx: vscode.ExtensionContext): void {
   statusBar.show();
   ctx.subscriptions.push(statusBar);
 
-  // Update status bar on workspace change
-  ctx.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(updateStatusBar));
+  ctx.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => updateStatusBar()));
 
   // Register all commands
-  const cmds = [
+  const cmds: [string, (...args: any[]) => any][] = [
     ["cartographer.index", cmdIndex],
     ["cartographer.search", cmdSearch],
     ["cartographer.ask", cmdAsk],
@@ -51,12 +46,12 @@ export function activate(ctx: vscode.ExtensionContext): void {
     ["cartographer.similar", cmdSimilar],
     ["cartographer.embed", cmdEmbed],
     ["cartographer.gitIndex", cmdGitIndex],
-    ["cartographer.graph", () => createGraphWebview(client)],
-    ["cartographer.graphEntityType", (t: string) => createGraphWebview(client, t, entityTree.currentRepo())],
+    ["cartographer.graph", () => createGraphWebview(client, ctx.extensionUri)],
+    ["cartographer.graphEntityType", (t: string) => createGraphWebview(client, ctx.extensionUri, t, entityTree.currentRepo())],
     ["cartographer.openDb", cmdOpenDb],
     ["cartographer.refresh", cmdRefresh],
     ["cartographer.searchType", cmdSearchByType],
-  ] as const;
+  ];
 
   for (const [id, fn] of cmds) {
     ctx.subscriptions.push(vscode.commands.registerCommand(id, fn));
@@ -72,20 +67,16 @@ export function activate(ctx: vscode.ExtensionContext): void {
         if (!range) return null;
         const word = document.getText(range);
         if (!word || word.length < 2) return null;
-        // Check cache (1 min TTL)
         const cached = hoverCache.get(word);
         if (cached && Date.now() - cached.time < 60000) {
-          if (cached.results.length > 0) {
-            return formatHover(cached.results);
-          }
+          if (cached.results.length > 0) return formatHover(cached.results);
           return null;
         }
-        // Debounce: don't search on every mouse movement
         return new Promise<vscode.Hover | null | undefined>(resolve => {
           if (hoverTimer) clearTimeout(hoverTimer);
-          hoverTimer = setTimeout(() => {
+          hoverTimer = setTimeout(async () => {
             try {
-              const results = client.search(word);
+              const results = await client.search(word);
               hoverCache.set(word, { results, time: Date.now() });
               resolve(results.length > 0 ? formatHover(results) : null);
             } catch {
@@ -115,14 +106,60 @@ export function activate(ctx: vscode.ExtensionContext): void {
     }),
   );
 
-  updateStatusBar();
+  // Auto-index workspace on activation if not already indexed
+  (async () => {
+    const wsName = vscode.workspace.workspaceFolders?.[0]?.name;
+    if (!wsName) { updateStatusBar(); return; }
+    const repoName = await client.resolveRepoName();
+    if (repoName) { updateStatusBar(); return; }
+    vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Cartographer: Indexing repository..." },
+      async () => {
+        await client.index();
+        repoTree.refresh();
+        entityTree.refresh();
+        updateStatusBar();
+      },
+    );
+  })();
+
+  // Auto re-index: only watch relevant files, debounced
+  let reindexTimer: NodeJS.Timeout | undefined;
+  const scheduleReindex = (uri: vscode.Uri) => {
+    if (!client.cfg("autoReindex", true)) return;
+    const wsName = vscode.workspace.workspaceFolders?.[0]?.name;
+    if (!wsName) return;
+    if (reindexTimer) clearTimeout(reindexTimer);
+    reindexTimer = setTimeout(async () => {
+      const repoName = await client.resolveRepoName();
+      if (!repoName) return;
+      statusBar.text = "$(sync~spin) Cartographer";
+      await client.index();
+      repoTree.refresh();
+      entityTree.refresh();
+      updateStatusBar();
+    }, 2000);
+  };
+  // Only watch source code files, not node_modules, .git, etc.
+  const watcher = vscode.workspace.createFileSystemWatcher("**/*.{py,js,ts,jsx,tsx,rs,go,java,kt,kts,cs,php,rb,c,h,cpp,hpp,cc,cxx,swift,scala,sc,ex,exs,lua,jl,zig,groovy,gvy,gsh}");
+  ctx.subscriptions.push(
+    watcher.onDidCreate(scheduleReindex),
+    watcher.onDidDelete(scheduleReindex),
+    watcher.onDidChange(scheduleReindex),
+    watcher,
+  );
+  ctx.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument(doc => {
+      if (doc.uri.scheme === "file") scheduleReindex(doc.uri);
+    }),
+  );
 }
 
 // ── Status bar ────────────────────────────────────────────────────────────
 
-function updateStatusBar(): void {
+async function updateStatusBar(): Promise<void> {
   try {
-    const sum = client.summarize();
+    const sum = await client.summarize();
     if (sum) {
       const ws = vscode.workspace.workspaceFolders?.[0]?.name || sum.name;
       statusBar.text = `$(graph) ${ws}  ${sum.total_nodes}N/${sum.total_edges}E`;
@@ -138,7 +175,7 @@ function updateStatusBar(): void {
 
 // ── Command implementations ───────────────────────────────────────────────
 
-function withProgress<T>(title: string, fn: () => T): Thenable<T> {
+function withProgress<T>(title: string, fn: () => Promise<T>): Thenable<T> {
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title },
     async () => fn(),
@@ -165,12 +202,9 @@ function showError(msg: string): void {
   vscode.window.showErrorMessage(`Cartographer: ${msg}`);
 }
 
-function cmdIndex(): void {
-  if (!vscode.workspace.workspaceFolders?.length) {
-    return void showError("Open a workspace folder first");
-  }
-  withProgress("Cartographer: Indexing repository...", () => {
-    const r = client.index();
+async function cmdIndex(): Promise<void> {
+  withProgress("Cartographer: Indexing repository...", async () => {
+    const r = await client.index();
     if (r.success) {
       vscode.window.showInformationMessage(`Indexed ${r.files} files in ${r.duration_ms}ms`);
       repoTree.refresh();
@@ -179,7 +213,6 @@ function cmdIndex(): void {
     } else {
       const msg = r.errors[0]?.replace(/^Error:\s*/, "") || "Index command failed";
       vscode.window.showErrorMessage(`Cartographer index failed: ${msg}`);
-      // Show error details in the Cartographer output channel
       const ch = vscode.window.createOutputChannel("Cartographer Index");
       ch.clear();
       ch.appendLine(r.errors.join("\n"));
@@ -188,16 +221,15 @@ function cmdIndex(): void {
   });
 }
 
-function cmdSearchByType(entityType: string): void {
+async function cmdSearchByType(entityType: string): Promise<void> {
   if (!entityType) return;
-  withProgress(`Cartographer: Loading ${entityType}s...`, () => {
-    const results = client.searchByType(entityType, 100, entityTree.currentRepo());
+  withProgress(`Cartographer: Loading ${entityType}s...`, async () => {
+    const results = await client.searchByType(entityType, 100, entityTree.currentRepo());
     searchTree.setResults(results);
     vscode.commands.executeCommand("workbench.view.extension.cartographer");
     if (results.length > 0) {
       vscode.window.showInformationMessage(`Found ${results.length} ${entityType}s`);
     } else {
-      // Check if there's a repo mismatch
       vscode.window.showWarningMessage(
         `Found 0 ${entityType}s. Check the Cartographer output channel for details.`
       );
@@ -209,37 +241,34 @@ function cmdSearchWith(query?: string): void {
   cmdSearch(query);
 }
 
-function cmdSearch(initial?: string): void {
-  vscode.window.showInputBox({
+async function cmdSearch(initial?: string): Promise<void> {
+  const q = await vscode.window.showInputBox({
     prompt: "Search the knowledge graph",
     placeHolder: "class name, function, file...",
     value: initial || "",
-  }).then(q => {
-    if (!q) return;
-    const results = client.search(q);
-    searchTree.setResults(results);
-    vscode.commands.executeCommand("workbench.view.extension.cartographer");
-    vscode.window.showInformationMessage(`Found ${results.length} results for "${q}"`);
   });
+  if (!q) return;
+  const results = await client.search(q);
+  searchTree.setResults(results);
+  vscode.commands.executeCommand("workbench.view.extension.cartographer");
+  vscode.window.showInformationMessage(`Found ${results.length} results for "${q}"`);
 }
 
-function cmdAsk(): void {
-  vscode.window.showInputBox({
+async function cmdAsk(): Promise<void> {
+  const q = await vscode.window.showInputBox({
     prompt: "Ask a natural language question about the codebase",
     placeHolder: "e.g. What does the auth module do? Explain checkout flow...",
-  }).then(q => {
-    if (!q) return;
-    withProgress("Cartographer: Querying...", () => {
-      const answer = client.ask(q);
-      showOutput("Cartographer Answer", answer);
-    });
+  });
+  if (!q) return;
+  withProgress("Cartographer: Querying...", async () => {
+    const answer = await client.ask(q);
+    showOutput("Cartographer Answer", answer);
   });
 }
 
-function cmdSummarize(repoName?: string): void {
-  const s = client.summarize(repoName);
+async function cmdSummarize(repoName?: string): Promise<void> {
+  const s = await client.summarize(repoName);
   if (!s) return void showError("No repository indexed");
-  // Update entity tree to show this repo's types
   entityTree.setRepo(repoName);
   const lines = [
     `Repository: ${s.name}`,
@@ -256,97 +285,88 @@ function cmdSummarize(repoName?: string): void {
   showOutput("Cartographer Summary", lines.join("\n"));
 }
 
-function cmdArchitecture(): void {
-  withProgress("Cartographer: Detecting architecture...", () => {
-    const result = client.architecture();
+async function cmdArchitecture(): Promise<void> {
+  withProgress("Cartographer: Detecting architecture...", async () => {
+    const result = await client.architecture();
     showOutput("Cartographer Architecture", result);
   });
 }
 
-function cmdImpact(): void {
-  vscode.window.showInputBox({
+async function cmdImpact(): Promise<void> {
+  const q = await vscode.window.showInputBox({
     prompt: "Find what depends on this symbol",
     placeHolder: "e.g. User, auth_service, database...",
-  }).then(q => {
-    if (!q) return;
-    const results = client.impact(q);
-    if (results.length === 0) return void vscode.window.showInformationMessage(`No dependents found for "${q}"`);
-    const lines = [`Impact analysis for "${q}"`, `Found ${results.length} dependents:`, ""];
-    for (const r of results) {
-      lines.push(`  [${r.type}] ${r.name}`);
-      if (r.file_path) lines.push(`    ${r.file_path}`);
-    }
-    showOutput("Cartographer Impact", lines.join("\n"));
   });
+  if (!q) return;
+  const results = await client.impact(q);
+  if (results.length === 0) return void vscode.window.showInformationMessage(`No dependents found for "${q}"`);
+  const lines = [`Impact analysis for "${q}"`, `Found ${results.length} dependents:`, ""];
+  for (const r of results) {
+    lines.push(`  [${r.type}] ${r.name}`);
+    if (r.file_path) lines.push(`    ${r.file_path}`);
+  }
+  showOutput("Cartographer Impact", lines.join("\n"));
 }
 
-function cmdNeighbors(): void {
-  vscode.window.showInputBox({
+async function cmdNeighbors(): Promise<void> {
+  const q = await vscode.window.showInputBox({
     prompt: "Show neighbors of a node",
     placeHolder: "Node name or class...",
-  }).then(async q => {
-    if (!q) return;
-    const depth = await vscode.window.showInputBox({ prompt: "Traversal depth", value: "2" }) || "2";
-    const results = client.neighbors(q, parseInt(depth) || 2);
-    if (results.length === 0) return void vscode.window.showInformationMessage(`No neighbors found for "${q}"`);
-    const lines = [`Neighbors of "${q}":`, ""];
-    for (const r of results) {
-      if (r.depth === 0) continue;
-      lines.push(`${"  ".repeat(r.depth)}[${r.type}] ${r.name}`);
-    }
-    showOutput("Cartographer Neighbors", lines.join("\n"));
   });
+  if (!q) return;
+  const depth = await vscode.window.showInputBox({ prompt: "Traversal depth", value: "2" }) || "2";
+  const results = await client.neighbors(q, parseInt(depth) || 2);
+  if (results.length === 0) return void vscode.window.showInformationMessage(`No neighbors found for "${q}"`);
+  const lines = [`Neighbors of "${q}":`, ""];
+  for (const r of results) {
+    if (r.depth === 0) continue;
+    lines.push(`${"  ".repeat(r.depth)}[${r.type}] ${r.name}`);
+  }
+  showOutput("Cartographer Neighbors", lines.join("\n"));
 }
 
-function cmdPath(): void {
-  const fromPromise = vscode.window.showInputBox({ prompt: "Start node", placeHolder: "e.g. UserController" });
-  fromPromise.then(from => {
-    if (!from) return;
-    vscode.window.showInputBox({ prompt: "End node", placeHolder: "e.g. Database" }).then(to => {
-      if (!to) return;
-      const results = client.path(from, to);
-      if (results.length === 0) return void vscode.window.showInformationMessage("No path found");
-      const lines = [`Path from "${from}" to "${to}":`];
-      for (const r of results) {
-        const arrow = r.depth > 0 ? "  → " : "     ";
-        lines.push(`${arrow}[${r.type}] ${r.name}`);
-      }
-      showOutput("Cartographer Path", lines.join("\n"));
-    });
-  });
+async function cmdPath(): Promise<void> {
+  const from = await vscode.window.showInputBox({ prompt: "Start node", placeHolder: "e.g. UserController" });
+  if (!from) return;
+  const to = await vscode.window.showInputBox({ prompt: "End node", placeHolder: "e.g. Database" });
+  if (!to) return;
+  const results = await client.path(from, to);
+  if (results.length === 0) return void vscode.window.showInformationMessage("No path found");
+  const lines = [`Path from "${from}" to "${to}":`];
+  for (const r of results) {
+    const arrow = r.depth > 0 ? "  → " : "     ";
+    lines.push(`${arrow}[${r.type}] ${r.name}`);
+  }
+  showOutput("Cartographer Path", lines.join("\n"));
 }
 
-function cmdSimilar(): void {
-  vscode.window.showInputBox({
+async function cmdSimilar(): Promise<void> {
+  const q = await vscode.window.showInputBox({
     prompt: "Find semantically similar nodes",
     placeHolder: "Target node name...",
-  }).then(q => {
-    if (!q) return;
-    withProgress("Cartographer: Searching similar...", () => {
-      const results = client.similar(q);
-      if (results.length === 0) return void vscode.window.showInformationMessage("No similar nodes found");
-      const lines = [`Similar to "${q}":`];
-      for (const r of results) {
-        lines.push(`  [${r.type}] ${r.name}  (score: ${r.score?.toFixed(3)})`);
-      }
-      showOutput("Cartographer Similar", lines.join("\n"));
-    });
+  });
+  if (!q) return;
+  withProgress("Cartographer: Searching similar...", async () => {
+    const results = await client.similar(q);
+    if (results.length === 0) return void vscode.window.showInformationMessage("No similar nodes found");
+    const lines = [`Similar to "${q}":`];
+    for (const r of results) {
+      lines.push(`  [${r.type}] ${r.name}  (score: ${r.score?.toFixed(3)})`);
+    }
+    showOutput("Cartographer Similar", lines.join("\n"));
   });
 }
 
-function cmdEmbed(): void {
-  withProgress("Cartographer: Generating embeddings (this may take a while)...", () => {
-    const result = client.embed();
+async function cmdEmbed(): Promise<void> {
+  withProgress("Cartographer: Generating embeddings (this may take a while)...", async () => {
+    const result = await client.embed();
     showOutput("Cartographer Embed", result);
   });
 }
 
-function cmdGitIndex(): void {
-  if (!vscode.workspace.workspaceFolders?.length) {
-    return void showError("Open a workspace folder first");
-  }
-  withProgress("Cartographer: Indexing git history...", () => {
-    const result = client.gitIndex();
+async function cmdGitIndex(): Promise<void> {
+  withProgress("Cartographer: Indexing git history...", async () => {
+    const result = await client.gitIndex();
     showOutput("Cartographer Git Index", result);
   });
 }
@@ -366,10 +386,10 @@ function cmdOpenDb(): void {
   });
 }
 
-function cmdRefresh(): void {
+async function cmdRefresh(): Promise<void> {
   repoTree.refresh();
   entityTree.refresh();
-  updateStatusBar();
+  await updateStatusBar();
   vscode.window.showInformationMessage("Cartographer views refreshed");
 }
 

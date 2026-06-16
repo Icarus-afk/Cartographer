@@ -1,4 +1,4 @@
-import { spawnSync } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import * as vscode from "vscode";
 import * as path from "path";
 import * as os from "os";
@@ -73,7 +73,7 @@ export class CartographerClient {
     return "cartographer";
   }
 
-  private cfg<T>(key: string, def: T): T {
+  cfg<T>(key: string, def: T): T {
     return vscode.workspace.getConfiguration("cartographer").get<T>(key, def);
   }
 
@@ -84,32 +84,12 @@ export class CartographerClient {
     return f;
   }
 
-  private repoFlag(): string[] {
-    const name = this._resolveRepoName();
+  private repoFlagSync(): string[] {
+    const name = this.resolveRepoSync();
     return name ? ["--repo", name] : [];
   }
 
-  private exec(args: string[]): string {
-    const binParts = this.bin.split(/\s+/);
-    const allArgs = [...binParts, ...args];
-    this.output.appendLine(`$ ${this.bin} ${args.join(" ")}`);
-    const r = spawnSync(allArgs[0], allArgs.slice(1), {
-      encoding: "utf-8", timeout: 120_000,
-    });
-    if (r.error) {
-      this.output.appendLine(`ERR: ${r.error.message}`);
-      throw r.error;
-    }
-    if (r.status !== 0) {
-      const msg = (r.stderr?.trim() || r.stdout?.trim() || `exit code ${r.status}`).slice(0, 500);
-      this.output.appendLine(`ERR: ${msg}`);
-      throw new Error(msg);
-    }
-    this.output.appendLine(r.stdout);
-    return r.stdout;
-  }
-
-  private _resolveRepoName(): string | null {
+  resolveRepoSync(): string | null {
     if (this._repoName) return this._repoName;
     const ws = vscode.workspace.workspaceFolders?.[0];
     if (!ws) return null;
@@ -131,47 +111,58 @@ export class CartographerClient {
       }
       return this._repoName;
     } catch {
-      this.output.appendLine("_resolveRepoName: failed");
+      this.output.appendLine("resolveRepoSync: failed");
       return null;
     }
   }
 
-  private _firstRepoName(): string | null {
-    try {
-      const r = spawnSync("python3", ["-c",
-        "import sqlite3,sys\n"
-        + "c=sqlite3.connect(sys.argv[1])\n"
-        + "row=c.execute('SELECT name FROM repositories LIMIT 1').fetchone()\n"
-        + "c.close()\n"
-        + "print(row[0] if row else '')",
-        this.dbPath(),
-      ], { encoding: "utf-8", timeout: 5000 });
-      return r.status === 0 ? r.stdout.trim() || null : null;
-    } catch {
-      this.output.appendLine("_firstRepoName: failed");
-      return null;
-    }
+  private async execAsync(args: string[]): Promise<string> {
+    const binParts = this.bin.split(/\s+/);
+    const allArgs = [...binParts, ...args];
+    this.output.appendLine(`$ ${this.bin} ${args.join(" ")}`);
+    return new Promise<string>((resolve, reject) => {
+      const child = spawn(allArgs[0], allArgs.slice(1), { timeout: 120_000 });
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.on("data", (chunk: Buffer) => stdout += chunk.toString("utf-8"));
+      child.stderr?.on("data", (chunk: Buffer) => stderr += chunk.toString("utf-8"));
+      child.on("error", (err: Error) => {
+        this.output.appendLine(`ERR: ${err.message}`);
+        reject(err);
+      });
+      child.on("close", (code: number | null) => {
+        this.output.appendLine(stdout);
+        if (code === 0) {
+          resolve(stdout);
+        } else {
+          const msg = (stderr?.trim() || stdout?.trim() || `exit code ${code}`).slice(0, 500);
+          this.output.appendLine(`ERR: ${msg}`);
+          reject(new Error(msg));
+        }
+      });
+    });
+  }
+
+  async resolveRepoName(): Promise<string | null> {
+    return this.resolveRepoSync();
   }
 
   private wsName(): string {
     return vscode.workspace.workspaceFolders?.[0]?.name || "";
   }
 
-  private repoPath(): string {
+  repoPath(): string {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "";
   }
 
-  private extensionDir(): string {
-    return path.dirname(__dirname);
-  }
+  // ── CLI commands (async) ────────────────────────────────────────────────
 
-  // ── CLI commands ──────────────────────────────────────────────────────
-
-  index(p?: string): { success: boolean; files: number; dirs: number; duration_ms: number; errors: string[] } {
+  async index(p?: string): Promise<{ success: boolean; files: number; dirs: number; duration_ms: number; errors: string[] }> {
     const target = p || this.repoPath();
     if (!target) throw new Error("No workspace folder open");
     try {
-      const out = this.exec(["index", target, ...this.globalFlags()]);
+      const out = await this.execAsync(["index", target, ...this.globalFlags()]);
+      this._repoName = null; // reset cached repo name after index
       const files = parseInt(out.match(/Indexed (\d+) files/)?.[1] || "0");
       const dirs = parseInt(out.match(/in (\d+) directories/)?.[1] || "0");
       const dur = parseFloat(out.match(/Duration: ([\d.]+)ms/)?.[1] || "0");
@@ -184,13 +175,13 @@ export class CartographerClient {
     }
   }
 
-  search(query: string, nodeType?: string, limit?: number, repoName?: string): SearchResult[] {
-    limit ??= this.cfg("maxResults", 40);
+  async search(query: string, nodeType?: string, limit?: number, repoName?: string): Promise<SearchResult[]> {
+    limit ??= this.cfg<number>("maxResults", 40);
     const args = ["ask", query, "-l", String(limit)];
     if (nodeType) args.push("-t", nodeType);
     try {
-      const rf = repoName ? ["--repo", repoName] : this.repoFlag();
-      const out = this.exec([...args, ...this.globalFlags(), ...rf]);
+      const rf = repoName ? ["--repo", repoName] : this.repoFlagSync();
+      const out = await this.execAsync([...args, ...this.globalFlags(), ...rf]);
       const results: SearchResult[] = [];
       const root = this.repoPath();
       let pending: SearchResult | null = null;
@@ -214,15 +205,15 @@ export class CartographerClient {
     }
   }
 
-  ask(query: string): string {
-    try { return this.exec(["query", query, ...this.globalFlags(), ...this.repoFlag()]); }
+  async ask(query: string): Promise<string> {
+    try { return await this.execAsync(["query", query, ...this.globalFlags(), ...this.repoFlagSync()]); }
     catch (e) { this.output.appendLine(`ask error: ${e}`); return "Query failed."; }
   }
 
-  summarize(repoName?: string): Summary | null {
+  async summarize(repoName?: string): Promise<Summary | null> {
     try {
-      const rf = repoName ? ["--repo", repoName] : this.repoFlag();
-      const out = this.exec(["summarize", ...this.globalFlags(), ...rf]);
+      const rf = repoName ? ["--repo", repoName] : this.repoFlagSync();
+      const out = await this.execAsync(["summarize", ...this.globalFlags(), ...rf]);
       const lines = out.split("\n");
       const s: Summary = {
         name: lines[0]?.replace("Repository: ", "").trim() || "",
@@ -248,14 +239,14 @@ export class CartographerClient {
     } catch (e) { this.output.appendLine(`summarize error: ${e}`); return null; }
   }
 
-  architecture(): string {
-    try { return this.exec(["architecture", "--detect", ...this.globalFlags(), ...this.repoFlag()]); }
+  async architecture(): Promise<string> {
+    try { return await this.execAsync(["architecture", "--detect", ...this.globalFlags(), ...this.repoFlagSync()]); }
     catch (e) { this.output.appendLine(`architecture error: ${e}`); return "Architecture detection failed."; }
   }
 
-  impact(target: string): ImpactResult[] {
+  async impact(target: string): Promise<ImpactResult[]> {
     try {
-      const out = this.exec(["impact", target, ...this.globalFlags(), ...this.repoFlag()]);
+      const out = await this.execAsync(["impact", target, ...this.globalFlags(), ...this.repoFlagSync()]);
       const results: ImpactResult[] = [];
       for (const l of out.split("\n")) {
         const m = l.match(/^\s{4}\[(\w+)\s*\]\s(.+?)\s\((.+)\)$/);
@@ -265,9 +256,9 @@ export class CartographerClient {
     } catch (e) { this.output.appendLine(`impact error: ${e}`); return []; }
   }
 
-  neighbors(name: string, depth = 2): NeighborResult[] {
+  async neighbors(name: string, depth = 2): Promise<NeighborResult[]> {
     try {
-      const out = this.exec(["neighbors", name, "-d", String(depth), ...this.globalFlags(), ...this.repoFlag()]);
+      const out = await this.execAsync(["neighbors", name, "-d", String(depth), ...this.globalFlags(), ...this.repoFlagSync()]);
       const results: NeighborResult[] = [];
       for (const l of out.split("\n")) {
         const m = l.match(/^(\s*)\[(\w+)\s*\]\s(.+)$/);
@@ -277,9 +268,9 @@ export class CartographerClient {
     } catch (e) { this.output.appendLine(`neighbors error: ${e}`); return []; }
   }
 
-  path(from: string, to: string): PathResult[] {
+  async path(from: string, to: string): Promise<PathResult[]> {
     try {
-      const out = this.exec(["path", from, to, ...this.globalFlags()]);
+      const out = await this.execAsync(["path", from, to, ...this.globalFlags()]);
       const results: PathResult[] = [];
       for (const l of out.split("\n")) {
         const m = l.match(/^\s{2}(→\s)?\[(\w+)\s*\]\s(.+)$/);
@@ -289,10 +280,10 @@ export class CartographerClient {
     } catch (e) { this.output.appendLine(`path error: ${e}`); return []; }
   }
 
-  similar(target: string): SearchResult[] {
-    const limit = this.cfg("maxResults", 20);
+  async similar(target: string): Promise<SearchResult[]> {
+    const limit = this.cfg<number>("maxResults", 20);
     try {
-      const out = this.exec(["similar", target, "-l", String(limit), ...this.globalFlags(), ...this.repoFlag()]);
+      const out = await this.execAsync(["similar", target, "-l", String(limit), ...this.globalFlags(), ...this.repoFlagSync()]);
       const results: SearchResult[] = [];
       for (const l of out.split("\n")) {
         const m = l.match(/^\s{2}\[(\w+)\s*\]\s(.+?)\s+\(score:\s*([\d.]+)\)/);
@@ -302,17 +293,17 @@ export class CartographerClient {
     } catch (e) { this.output.appendLine(`similar error: ${e}`); return []; }
   }
 
-  embed(): string {
-    try { return this.exec(["embed", ...this.globalFlags(), ...this.repoFlag()]); }
+  async embed(): Promise<string> {
+    try { return await this.execAsync(["embed", ...this.globalFlags(), ...this.repoFlagSync()]); }
     catch (e) { this.output.appendLine(`embed error: ${e}`); return "Embedding failed."; }
   }
 
-  gitIndex(): string {
-    try { return this.exec(["git", "index", `--repo-path`, this.repoPath(), ...this.globalFlags(), ...this.repoFlag()]); }
+  async gitIndex(): Promise<string> {
+    try { return await this.execAsync(["git", "index", "--repo-path", this.repoPath(), ...this.globalFlags(), ...this.repoFlagSync()]); }
     catch (e) { this.output.appendLine(`gitIndex error: ${e}`); return "Git index failed."; }
   }
 
-  getRepos(): RepoInfo[] {
+  async getRepos(): Promise<RepoInfo[]> {
     try {
       const db = this.dbPath();
       const r = spawnSync("python3", ["-c",
@@ -335,22 +326,22 @@ export class CartographerClient {
       throw new Error(r.stderr?.trim() || `exit ${r.status}`);
     } catch (e) {
       this.output.appendLine(`getRepos error: ${e}`);
-      const s = this.summarize();
+      const s = await this.summarize();
       return s ? [{ name: s.name, path: s.path, nodes: s.total_nodes, edges: s.total_edges }] : [];
     }
   }
 
-  searchByType(nodeType: string, limit = 100, repoName?: string): SearchResult[] {
+  async searchByType(nodeType: string, limit = 100, repoName?: string): Promise<SearchResult[]> {
     return this.search("", nodeType, limit, repoName);
   }
 
   // ── Graph data via CLI graph-data command ────────────────────────────
 
-  getGraphData(limit = 400, repoOverride?: string): GraphData {
-    const tryRepo = (r: string | null | undefined): GraphData | null => {
+  async getGraphData(limit = 400, repoOverride?: string): Promise<GraphData> {
+    const tryRepo = async (r: string | null | undefined): Promise<GraphData | null> => {
       if (!r) return null;
       try {
-        const out = this.exec(["graph-data", "-l", String(limit), ...this.globalFlags(), "--repo", r]);
+        const out = await this.execAsync(["graph-data", "-l", String(limit), ...this.globalFlags(), "--repo", r]);
         const d = JSON.parse(out);
         if (d.error) { this.output.appendLine(`getGraphData error: ${d.error}`); return null; }
         return d;
@@ -359,10 +350,10 @@ export class CartographerClient {
         return null;
       }
     };
+    const repoName = await this.resolveRepoName();
     return (
-      tryRepo(repoOverride) ||
-      tryRepo(this._resolveRepoName()) ||
-      tryRepo(this._firstRepoName()) ||
+      (await tryRepo(repoOverride)) ||
+      (await tryRepo(repoName)) ||
       { nodes: [], edges: [], node_types: {}, total_nodes: 0, total_edges: 0 }
     );
   }

@@ -30,10 +30,10 @@ export class RepoTreeProvider implements vscode.TreeDataProvider<RepoItem> {
 
   getTreeItem(el: RepoItem): vscode.TreeItem { return el; }
 
-  getChildren(el?: RepoItem): Thenable<RepoItem[]> {
-    if (el) return Promise.resolve([]);
+  async getChildren(el?: RepoItem): Promise<RepoItem[]> {
+    if (el) return [];
 
-    const repos = this.client.getRepos();
+    const repos = await this.client.getRepos();
     if (repos.length === 0) {
       return Promise.resolve([
         new RepoItem("No repository indexed", "Run Index Repository", vscode.TreeItemCollapsibleState.None, "question"),
@@ -109,8 +109,8 @@ export class EntityTreeProvider implements vscode.TreeDataProvider<EntityItem> {
 
   getTreeItem(el: EntityItem): vscode.TreeItem { return el; }
 
-  getChildren(): Thenable<EntityItem[]> {
-    const s = this.client.summarize(this._repoName);
+  async getChildren(): Promise<EntityItem[]> {
+    const s = await this.client.summarize(this._repoName);
     if (!s?.node_breakdown || Object.keys(s.node_breakdown).length === 0) {
       return Promise.resolve([
         new EntityItem("No data", 0, "", vscode.TreeItemCollapsibleState.None),
