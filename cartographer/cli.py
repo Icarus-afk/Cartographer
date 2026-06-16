@@ -37,6 +37,26 @@ from cartographer.retrieval.traversal import (
 )
 
 
+def _ensure_indexed(db_path: Path) -> bool:
+    """Auto-index CWD if DB is empty and CWD is a git repo. Returns True if data is available."""
+    from cartographer.storage.connection import get_connection, init_schema
+    conn = get_connection(db_path)
+    init_schema(conn)
+    count = conn.execute("SELECT COUNT(*) FROM repositories").fetchone()[0]
+    conn.close()
+    if count > 0:
+        return True
+    cwd = Path.cwd()
+    if not (cwd / ".git").is_dir():
+        return False
+    click.echo("No indexed repos found. Auto-indexing current directory...", err=True)
+    result = index_repository(str(cwd), db_path=db_path)
+    if result.success:
+        manifest = result.manifest
+        click.echo(f"Indexed {manifest.total_files} files in {manifest.total_dirs} directories", err=True)
+    return bool(result.success)
+
+
 def _count_entities(parsed_files, kind: EntityKind) -> int:
     total = 0
     for pf in parsed_files:
@@ -59,6 +79,66 @@ def _walk_children(entity):
 def main(ctx, db):
     ctx.ensure_object(dict)
     ctx.obj["db_path"] = Path(db) if db else Path.home() / ".cartographer" / "index.db"
+
+
+@main.command()
+@click.argument("path", default=".", type=click.Path(exists=True, file_okay=False))
+@click.option("--force", "-f", is_flag=True, help="Re-index even if already indexed")
+@click.pass_context
+def init(ctx, path, force):
+    """Initialize Cartographer for a project. Sets up the database and indexes the repository."""
+    db_path = ctx.obj["db_path"]
+    from cartographer.storage.connection import get_connection, init_schema
+
+    conn = get_connection(db_path)
+    init_schema(conn)
+    conn.close()
+
+    resolved = str(Path(path).resolve())
+    if not force:
+        conn = get_connection(db_path)
+        existing = conn.execute(
+            "SELECT name FROM repositories WHERE path = ?", (resolved,)
+        ).fetchone()
+        conn.close()
+        if existing:
+            click.echo(f"Cartographer is already initialized for '{existing[0]}'")
+            click.echo(f"Database: {db_path}")
+            click.echo()
+            click.echo("To re-index, run:  cartographer index .")
+            click.echo("To start fresh:    cartographer init . --force")
+            return
+
+    click.echo(f"Initializing Cartographer for {path}...")
+    click.echo(f"Database: {db_path}")
+    click.echo()
+
+    from cartographer.ingestion.engine import index_repository
+    result = index_repository(resolved, db_path=db_path)
+
+    if not result.success:
+        for err in result.errors:
+            click.echo(f"Error: {err}", err=True)
+        if not result.manifest:
+            raise click.Abort()
+
+    manifest = result.manifest
+    click.echo(f"Indexed {manifest.total_files} files in {manifest.total_dirs} directories")
+    click.echo(f"Duration: {result.duration_ms}ms")
+    click.echo()
+
+    if result.parsed_files:
+        funcs = _count_entities(result.parsed_files, EntityKind.FUNCTION)
+        classes = _count_entities(result.parsed_files, EntityKind.CLASS)
+        methods = _count_entities(result.parsed_files, EntityKind.METHOD)
+        click.echo(f"Entities: {classes} classes, {funcs} functions, {methods} methods")
+
+    click.echo()
+    click.echo("Next steps:")
+    click.echo("  cartographer embed              Enable semantic search")
+    click.echo("  cartographer git index          Index git history")
+    click.echo("  cartographer ask <query>        Search the knowledge graph")
+    click.echo("  cartographer graph-data -r <name>  Export graph data")
 
 
 @main.command()
@@ -117,6 +197,9 @@ def index(ctx, path):
         for err in result.errors:
             click.echo(f"Warning: {err}", err=True)
 
+    click.echo()
+    click.echo("Next: run 'cartographer embed' and 'cartographer git index' for full features")
+
 
 @main.command()
 @click.argument("query")
@@ -128,6 +211,7 @@ def index(ctx, path):
 @click.pass_context
 def ask(ctx, query, node_type, repo, limit, semantic, max_tokens):
     """Search the knowledge graph."""
+    _ensure_indexed(ctx.obj["db_path"])
     if semantic:
         results = similarity_search(ctx.obj["db_path"], query, limit, repo)
         if not results:
@@ -167,6 +251,7 @@ def ask(ctx, query, node_type, repo, limit, semantic, max_tokens):
 @click.pass_context
 def impact(ctx, target, repo, max_tokens):
     """Analyze what depends on a given file or symbol."""
+    _ensure_indexed(ctx.obj["db_path"])
     results = impact_analysis(target, ctx.obj["db_path"], repo)
 
     if not results:
@@ -197,6 +282,7 @@ def impact(ctx, target, repo, max_tokens):
 @click.pass_context
 def neighbors(ctx, name, repo, depth, max_tokens):
     """Show neighbors of a node in the graph."""
+    _ensure_indexed(ctx.obj["db_path"])
     from cartographer.storage.connection import get_connection
 
     conn = get_connection(ctx.obj["db_path"])
@@ -227,6 +313,7 @@ def neighbors(ctx, name, repo, depth, max_tokens):
 @click.pass_context
 def summarize(ctx, repo, max_tokens):
     """Generate repository summary from the knowledge graph."""
+    _ensure_indexed(ctx.obj["db_path"])
     summary = generate_summary(ctx.obj["db_path"], repo)
 
     if not summary:
@@ -268,6 +355,7 @@ def summarize(ctx, repo, max_tokens):
 @click.pass_context
 def context(ctx, repo, max_tokens, top_n):
     """Generate a structured context package (graph + architecture + key nodes)."""
+    _ensure_indexed(ctx.obj["db_path"])
     summary = generate_summary(ctx.obj["db_path"], repo)
     if not summary:
         click.echo("No repository found. Run 'cartographer index' first.")
@@ -301,6 +389,7 @@ def context(ctx, repo, max_tokens, top_n):
 @click.pass_context
 def path(ctx, from_name, to_name, max_depth, max_tokens):
     """Find path between two nodes."""
+    _ensure_indexed(ctx.obj["db_path"])
     results = find_path(from_name, to_name, ctx.obj["db_path"], max_depth=max_depth)
 
     if not results:
@@ -326,10 +415,13 @@ def embed(ctx, repo):
     """Generate vector embeddings for semantic search."""
     click.echo("Embedding...")
     try:
-        count = generate_embeddings(ctx.obj["db_path"], repo)
-        click.echo(f"Embedded {count} nodes.")
-        if count == 0:
-            click.echo("All nodes already embedded (run with a new repo to embed).")
+        new_count, skip_count = generate_embeddings(ctx.obj["db_path"], repo)
+        if new_count:
+            click.echo(f"Embedded {new_count} nodes.")
+        else:
+            click.echo("All nodes already embedded.")
+        if skip_count:
+            click.echo(f"Skipped {skip_count} already-embedded nodes.")
     except Exception as e:
         click.echo(f"Embedding failed: {e}", err=True)
 
@@ -341,6 +433,7 @@ def embed(ctx, repo):
 @click.pass_context
 def similar(ctx, target, repo, limit):
     """Find semantically similar nodes."""
+    _ensure_indexed(ctx.obj["db_path"])
     from cartographer.storage.connection import get_connection
 
     conn = get_connection(ctx.obj["db_path"])
@@ -372,6 +465,7 @@ def similar(ctx, target, repo, limit):
 @click.pass_context
 def architecture(ctx, repo, detect, verbose):
     """Show or detect repository architecture."""
+    _ensure_indexed(ctx.obj["db_path"])
     if detect:
         click.echo("Detecting architecture...")
         result = detect_architecture(ctx.obj["db_path"], repo)
@@ -491,6 +585,7 @@ def version():
 @click.pass_context
 def query(ctx, query_str, repo, limit, max_tokens, verbose):
     """Ask a natural language question about the repository."""
+    _ensure_indexed(ctx.obj["db_path"])
     try:
         result = execute_query(query_str, ctx.obj["db_path"], repo, limit, max_tokens)
         click.echo(result)
@@ -697,27 +792,73 @@ def graph_data(ctx, repo, limit):
         (repo_id,),
     ).fetchall()
 
-    # Sample nodes by degree (most connected first) so the graph shows edges
-    nodes = conn.execute(
+    # Extract a connected subgraph: pick high-degree hubs and include all their neighbors
+    hub_count = max(5, limit // 8)
+    seeds = conn.execute(
         """SELECT n.id, n.name, n.node_type, n.file_path
            FROM nodes n
            WHERE n.repository_id = ?
            ORDER BY (SELECT COUNT(*) FROM edges WHERE repository_id = ?
                      AND (source_node_id = n.id OR target_node_id = n.id)) DESC, RANDOM()
            LIMIT ?""",
-        (repo_id, repo_id, limit),
+        (repo_id, repo_id, hub_count),
     ).fetchall()
 
-    node_ids = [n[0] for n in nodes]
-    edges = []
-    if node_ids:
-        placeholders = ",".join("?" for _ in node_ids)
-        edges = conn.execute(
-            f"""SELECT source_node_id, target_node_id, edge_type FROM edges
-                WHERE repository_id = ? AND source_node_id IN ({placeholders})
-                AND target_node_id IN ({placeholders})""",
-            (repo_id, *node_ids, *node_ids),
+    # Assign a unique param name per seed for the OR conditions
+    seed_ids = [s[0] for s in seeds]
+    all_ids: list[int] = list(seed_ids)
+    if seed_ids:
+        seed_ph = ",".join("?" for _ in seed_ids)
+        # Include all neighbors of seed hubs (no cap per seed)
+        rows = conn.execute(
+            f"""SELECT DISTINCT n.id FROM nodes n
+                JOIN edges e ON (e.source_node_id = n.id OR e.target_node_id = n.id)
+                WHERE n.repository_id = ?
+                AND (e.source_node_id IN ({seed_ph}) OR e.target_node_id IN ({seed_ph}))""",
+            (repo_id, *seed_ids, *seed_ids),
         ).fetchall()
+        neighbor_ids = [r[0] for r in rows]
+        for nid in neighbor_ids:
+            if len(all_ids) >= limit:
+                break
+            if nid not in all_ids:
+                all_ids.append(nid)
+
+    # If we still have room, add the next highest-degree nodes not yet included
+    if all_ids and len(all_ids) < limit:
+        ph = ",".join("?" for _ in all_ids)
+        remaining = conn.execute(
+            f"""SELECT n.id FROM nodes n
+                WHERE n.repository_id = ? AND n.id NOT IN ({ph})
+                ORDER BY (SELECT COUNT(*) FROM edges WHERE repository_id = ?
+                          AND (source_node_id = n.id OR target_node_id = n.id)) DESC
+                LIMIT ?""",
+            (repo_id, *all_ids, repo_id, limit - len(all_ids)),
+        ).fetchall()
+        for r in remaining:
+            all_ids.append(r[0])
+
+    final_ids = all_ids[:limit]
+    nodes_list = []
+    edges = []
+    if not final_ids:
+        return {"nodes": [], "edges": []}
+
+    ph = ",".join("?" for _ in final_ids)
+    nodes_list = conn.execute(
+        f"SELECT id, name, node_type, file_path FROM nodes"
+        f" WHERE id IN ({ph})",
+        (*final_ids,),
+    ).fetchall()
+
+    ph = ",".join("?" for _ in final_ids)
+    edges = conn.execute(
+        f"""SELECT source_node_id, target_node_id, edge_type FROM edges
+            WHERE repository_id = ?
+            AND source_node_id IN ({ph})
+            AND target_node_id IN ({ph})""",
+        (repo_id, *final_ids, *final_ids),
+    ).fetchall()
 
     total_nodes = conn.execute(
         "SELECT COUNT(*) FROM nodes WHERE repository_id = ?", (repo_id,)
@@ -731,9 +872,176 @@ def graph_data(ctx, repo, limit):
         "total_nodes": total_nodes,
         "total_edges": total_edges,
         "node_types": {r[0]: r[1] for r in type_counts},
-        "nodes": [{"id": n[0], "name": n[1], "type": n[2], "file_path": n[3]} for n in nodes],
+        "nodes": [{"id": n[0], "name": n[1], "type": n[2], "file_path": n[3]} for n in nodes_list],
         "edges": [{"source": e[0], "target": e[1], "type": e[2]} for e in edges],
     }))
+
+
+# ── repo management ──────────────────────────────────────────────────────────
+
+
+@main.group()
+def repo():
+    """Manage indexed repositories."""
+
+
+@repo.command("list")
+@click.pass_context
+def repo_list(ctx):
+    """List all indexed repositories."""
+    from cartographer.storage.connection import get_connection
+    conn = get_connection(ctx.obj["db_path"])
+    rows = conn.execute(
+        """SELECT r.name, r.path,
+                  (SELECT COUNT(*) FROM nodes WHERE repository_id = r.id) as node_count,
+                  (SELECT COUNT(*) FROM edges WHERE repository_id = r.id) as edge_count
+           FROM repositories r ORDER BY r.name"""
+    ).fetchall()
+    conn.close()
+    if not rows:
+        click.echo("No repositories indexed.")
+        return
+    click.echo(f"{'Name':<20} {'Nodes':<8} {'Edges':<8} Path")
+    click.echo("-" * 80)
+    for name, path, nodes, edges in rows:
+        click.echo(f"{name:<20} {nodes:<8} {edges:<8} {path}")
+
+
+@repo.command("remove")
+@click.argument("name")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+@click.pass_context
+def repo_remove(ctx, name, yes):
+    """Remove a repository and all its data from the database."""
+    from cartographer.storage.connection import get_connection
+    conn = get_connection(ctx.obj["db_path"])
+
+    row = conn.execute("SELECT id, path FROM repositories WHERE name = ?", (name,)).fetchone()
+    if not row:
+        click.echo(f"No repository found: {name}")
+        return
+
+    repo_id, repo_path = row
+    total_nodes = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE repository_id = ?", (repo_id,)
+    ).fetchone()[0]
+    total_edges = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE repository_id = ?", (repo_id,)
+    ).fetchone()[0]
+
+    if not yes:
+        click.confirm(
+            f"Remove '{name}' ({repo_path}) with {total_nodes} nodes"
+            f" and {total_edges} edges?",
+            abort=True,
+        )
+
+    conn.execute("DELETE FROM commit_authors WHERE repository_id = ?", (repo_id,))
+    conn.execute(
+        "DELETE FROM commit_files WHERE commit_id IN"
+        " (SELECT id FROM commits WHERE repository_id = ?)",
+        (repo_id,),
+    )
+    conn.execute("DELETE FROM commits WHERE repository_id = ?", (repo_id,))
+    conn.execute("DELETE FROM architecture WHERE repository_id = ?", (repo_id,))
+    conn.execute(
+        "DELETE FROM embeddings WHERE node_id IN"
+        " (SELECT id FROM nodes WHERE repository_id = ?)",
+        (repo_id,),
+    )
+    conn.execute("DELETE FROM edges WHERE repository_id = ?", (repo_id,))
+    conn.execute("DELETE FROM nodes WHERE repository_id = ?", (repo_id,))
+    conn.execute("DELETE FROM repositories WHERE id = ?", (repo_id,))
+    conn.commit()
+    conn.close()
+
+    click.echo(
+        f"Removed '{name}' ({total_nodes} nodes, {total_edges} edges)"
+    )
+
+
+# ── db management ────────────────────────────────────────────────────────────
+
+
+@main.group()
+def db():
+    """Manage the Cartographer database."""
+
+
+@db.command("vacuum")
+@click.pass_context
+def db_vacuum(ctx):
+    """Reclaim storage space by running VACUUM on the database."""
+    from cartographer.storage.connection import get_connection
+    db_path = ctx.obj["db_path"]
+
+    before = db_path.stat().st_size if db_path.exists() else 0
+    conn = get_connection(db_path)
+    conn.execute("VACUUM")
+    conn.close()
+    after = db_path.stat().st_size
+
+    saved = before - after
+    if saved > 0:
+        click.echo(
+            f"Database shrunk: {_fmt_size(before)} → {_fmt_size(after)}"
+            f" (saved {_fmt_size(saved)})"
+        )
+    else:
+        click.echo(f"Database size: {_fmt_size(after)} (no savings)")
+
+
+@db.command("info")
+@click.pass_context
+def db_info(ctx):
+    """Show database statistics."""
+    from cartographer.storage.connection import get_connection
+    db_path = ctx.obj["db_path"]
+
+    if not db_path.exists():
+        click.echo("Database does not exist yet. Run 'cartographer init' first.")
+        return
+
+    size = db_path.stat().st_size
+    conn = get_connection(db_path)
+
+    repo_count = conn.execute("SELECT COUNT(*) FROM repositories").fetchone()[0]
+    node_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+    edge_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+    embed_count = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+    commit_count = conn.execute("SELECT COUNT(*) FROM commits").fetchone()[0]
+
+    # Per-repo breakdown
+    per_repo = conn.execute(
+        """SELECT r.name,
+                  (SELECT COUNT(*) FROM nodes WHERE repository_id = r.id) as nodes,
+                  (SELECT COUNT(*) FROM edges WHERE repository_id = r.id) as edges
+           FROM repositories r ORDER BY nodes DESC"""
+    ).fetchall()
+
+    conn.close()
+
+    click.echo(f"Database: {db_path}")
+    click.echo(f"Size: {_fmt_size(size)}")
+    click.echo(f"Repositories: {repo_count}")
+    click.echo(f"Total nodes: {node_count}")
+    click.echo(f"Total edges: {edge_count}")
+    click.echo(f"Embeddings: {embed_count}")
+    click.echo(f"Commits: {commit_count}")
+    if per_repo:
+        click.echo()
+        click.echo(f"{'Repository':<20} {'Nodes':<8} {'Edges':<8}")
+        click.echo("-" * 40)
+        for name, n, e in per_repo:
+            click.echo(f"{name:<20} {n:<8} {e:<8}")
+
+
+def _fmt_size(bytes_: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if bytes_ < 1024:
+            return f"{bytes_:.1f}{unit}"
+        bytes_ /= 1024
+    return f"{bytes_:.1f}TB"
 
 
 def _get_repo(ctx) -> tuple[str, str] | None:
