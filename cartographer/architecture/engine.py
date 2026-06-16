@@ -58,7 +58,7 @@ CLASS_PREFIX_RULES: list[tuple[str, str, float]] = [
 ]
 
 INTERFACE_PREFIX_RULES: list[tuple[str, str, float]] = [
-    ("i", "controller", 0.3),
+    # "IFoo" convention (C#/Java); only matches I followed by uppercase
 ]
 
 FILE_NAME_RULES: list[tuple[str, str, float]] = [
@@ -314,8 +314,14 @@ def _score_file_name(
     stem = Path(lower).stem
     for keyword, layer, weight in rules:
         kw = keyword.lower()
-        if kw in stem:
-            results.append((layer, weight, f"filename contains '{keyword}'"))
+        # Short keywords (≤3 chars) use word-boundary matching to avoid false positives
+        # e.g. "api" should not match "capitalize", "rapid", etc.
+        if len(kw) <= 3:
+            if stem == kw or stem.endswith(f"_{kw}") or stem.startswith(f"{kw}_") or f"_{kw}_" in stem:
+                results.append((layer, weight, f"filename contains '{keyword}'"))
+        else:
+            if kw in stem:
+                results.append((layer, weight, f"filename contains '{keyword}'"))
     return results
 
 
@@ -337,15 +343,22 @@ def _detect_framework_from_graph(
     manifest_row = conn.execute(
         "SELECT manifest_json FROM repositories WHERE id = ?", (repo_id,)
     ).fetchone()
+    # Normalize framework names from manifest to internal keys
+    FW_NAME_ALIASES = {
+        "ruby_on_rails": "rails",
+        "ruby_rails": "rails",
+    }
+
     if manifest_row and manifest_row[0]:
         try:
             manifest_data = json.loads(manifest_row[0])
             fw_list = manifest_data.get("frameworks", [])
             if fw_list:
                 return [
-                    {"name": f["name"].lower().replace(" ", "_").replace("-", "_"),
+                    {"name": FW_NAME_ALIASES.get(name, name),
                      "confidence": f["confidence"]}
                     for f in fw_list
+                    if (name := f["name"].lower().replace(" ", "_").replace("-", "_"))
                 ]
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
@@ -370,10 +383,18 @@ def _detect_framework_from_graph(
 
     scores: dict[str, float] = {}
 
+    # Check if repo has Ruby files — required for Rails confirmation
+    has_ruby = conn.execute(
+        """SELECT 1 FROM nodes n
+           JOIN repositories r ON n.repository_id = r.id
+           WHERE r.id = ? AND n.file_path LIKE '%.rb'
+           LIMIT 1""",
+        (repo_id,),
+    ).fetchone() is not None
+
     checks: list[tuple[str, str, float]] = [
         ("django",   "settings", 0.5),
         ("django",   "wsgi",     0.3),
-        ("rails",    "app",      0.3),
         ("laravel",  "app/http", 0.5),
         ("nestjs",   "module",   0.5),
         ("express",  "routes",   0.4),
@@ -382,7 +403,6 @@ def _detect_framework_from_graph(
         ("fastapi",  "routers",  0.5),
         ("fastapi",  "schemas",  0.4),
         ("next.js",  "pages",    0.4),
-        ("next.js",  "app",      0.3),
         ("actix_web", "handlers", 0.4),
         ("axum",     "handlers", 0.4),
     ]
@@ -391,18 +411,18 @@ def _detect_framework_from_graph(
             scores[fw] = scores.get(fw, 0) + weight
 
     for fname in fnames:
-        lower = fname.lower()
-        if lower == "manage.py":
+        base = Path(fname).name.lower()
+        if base == "manage.py":
             scores["django"] = scores.get("django", 0) + 0.8
-        if lower in ("gemfile",):
+        if base in ("gemfile",) and has_ruby:
             scores["rails"] = scores.get("rails", 0) + 0.5
-        if lower in ("artisan",):
+        if base in ("artisan",):
             scores["laravel"] = scores.get("laravel", 0) + 0.6
-        if lower in ("next.config.js", "next.config.ts"):
+        if base in ("next.config.js", "next.config.ts"):
             scores["next.js"] = scores.get("next.js", 0) + 0.7
-        if lower in ("nest-cli.json",):
+        if base in ("nest-cli.json",):
             scores["nestjs"] = scores.get("nestjs", 0) + 0.7
-        if lower.endswith("pom.xml") or lower.endswith("build.gradle"):
+        if base.endswith("pom.xml") or base.endswith("build.gradle"):
             scores["spring_boot"] = scores.get("spring_boot", 0) + 0.6
 
     results = []
@@ -494,7 +514,8 @@ def _analyze(
     architecture["domains"] = _detect_domains(conn, repo_id, resolved)
 
     _persist_architecture(conn, repo_id, resolved,
-                          architecture["patterns"], architecture["framework_patterns"])
+                          architecture["patterns"], architecture["framework_patterns"],
+                          architecture["domains"])
     return architecture
 
 
@@ -589,7 +610,7 @@ def _collect_evidence(
             if len(parts) >= 2 and Path(fname).name.lower() in (
                 "models.py", "views.py", "urls.py", "admin.py",
             ):
-                app_dir = parts[0]
+                app_dir = parts[-2]
                 _add_evidence("controller", "django_app", fpath,
                               f"Django app '{app_dir}'", 0.5)
 
@@ -898,18 +919,9 @@ def _detect_domains(
                 "entity_type_counts": entity_type_counts,
             })
 
-    conn.execute("DELETE FROM architecture WHERE repository_id = ? AND layer = 'domain'", (repo_id,))
-    rows = [(repo_id, "domain", d["name"], json.dumps(d)) for d in domains]
-    if rows:
-        conn.executemany(
-            "INSERT INTO architecture (repository_id, layer, pattern, description) VALUES (?, ?, ?, ?)",
-            rows,
-        )
-    conn.commit()
     return domains
 
 
-@functools.lru_cache(maxsize=2048)
 def _file_layer_for_domain(fname: str, resolved: dict[str, dict[str, Any]]) -> str | None:
     hits = _score_file_name(fname, FILE_NAME_RULES)
     for layer, weight, _reason in hits:
@@ -924,11 +936,14 @@ def _persist_architecture(
     resolved: dict[str, dict[str, Any]],
     patterns: list[dict[str, Any]],
     fw_patterns: list[dict[str, Any]],
+    domains: list[dict[str, Any]] | None = None,
 ) -> None:
     conn.execute("DELETE FROM architecture WHERE repository_id = ?", (repo_id,))
     rows: list[tuple[int, str, str | None, str]] = []
     for layer_name, info in resolved.items():
         rows.append((repo_id, layer_name, None, info["description"]))
+    for d in domains or []:
+        rows.append((repo_id, "domain", d["name"], json.dumps(d)))
     for pat in patterns:
         rows.append((repo_id, "pattern", pat["name"], pat["description"]))
     for fwp in fw_patterns:
