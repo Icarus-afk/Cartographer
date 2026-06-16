@@ -5,13 +5,33 @@ import logging
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
+from typing import TypedDict
 
 from cartographer.core.models import EntityKind, ParsedEntity, ParsedFile, RepositoryManifest
 from cartographer.storage.connection import get_connection, init_schema
 
 logger = logging.getLogger(__name__)
 
-GraphStats = dict
+
+class GraphStats(TypedDict):
+    nodes: int
+    edges: int
+    files: int
+    functions: int
+    classes: int
+    methods: int
+    modules: int
+    constants: int
+    directories: int
+    api_endpoints: int
+    interfaces: int
+    controllers: int
+    services: int
+    middleware: int
+    repositories: int
+    jobs: int
+    workers: int
+    queues: int
 
 
 _CLASSIFIER_SUFFIXES: dict[str, EntityKind] = {
@@ -63,26 +83,7 @@ def build_graph(
 
     repo_id = _ensure_repository(conn, repo_path, manifest)
 
-    stats: GraphStats = {
-        "nodes": 0,
-        "edges": 0,
-        "files": 0,
-        "functions": 0,
-        "classes": 0,
-        "methods": 0,
-        "modules": 0,
-        "constants": 0,
-        "directories": 0,
-        "api_endpoints": 0,
-        "interfaces": 0,
-        "controllers": 0,
-        "services": 0,
-        "middleware": 0,
-        "repositories": 0,
-        "jobs": 0,
-        "workers": 0,
-        "queues": 0,
-    }
+    stats: dict[str, int] = {k: 0 for k in GraphStats.__annotations__}
 
     conn.execute(
         "DELETE FROM embeddings WHERE node_id IN (SELECT id FROM nodes WHERE repository_id = ?)",
@@ -179,7 +180,7 @@ def build_graph(
     )
     conn.commit()
     conn.close()
-    return stats
+    return stats  # type: ignore[return-value]
 
 
 def _process_entity(

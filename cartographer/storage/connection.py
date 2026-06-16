@@ -133,10 +133,21 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_edges_target
         ON edges(target_node_id)
     """)
-    conn.execute("""
-        CREATE INDEX IF NOT EXISTS idx_embeddings_node_model
-        ON embeddings(node_id, model)
-    """)
+    has_unique = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master"
+        " WHERE type='index' AND name='idx_embeddings_node_model' AND sql LIKE '%UNIQUE%'"
+    ).fetchone()[0]
+    if not has_unique:
+        conn.execute(
+            "DROP INDEX IF EXISTS idx_embeddings_node_model"
+        )
+        conn.execute(
+            "DELETE FROM embeddings WHERE rowid NOT IN"
+            " (SELECT MIN(rowid) FROM embeddings GROUP BY node_id, model)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_embeddings_node_model ON embeddings(node_id, model)"
+        )
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_commits_hash
         ON commits(repository_id, hash)

@@ -39,7 +39,11 @@ def _build_node_text(name: str, node_type: str, file_path: str, metadata: dict[s
 def generate_embeddings(
     db_path: Path,
     repo_name: str | None = None,
-) -> int:
+) -> tuple[int, int]:
+    """Generate embeddings for nodes that don't have them yet.
+
+    Returns (newly_embedded, already_embedded).
+    """
     from cartographer.storage.connection import get_connection
     conn = get_connection(db_path)
     model = _get_model()
@@ -50,20 +54,23 @@ def generate_embeddings(
         repo_filter = "AND r.name = ?"
         params.append(repo_name)
 
+    embeddable_types_list = list(EMBEDDABLE_TYPES)
+    placeholders = ",".join("?" for _ in embeddable_types_list)
+
     rows = conn.execute(
         f"""SELECT n.id, n.name, n.node_type, n.file_path, n.metadata_json, r.name
             FROM nodes n
             JOIN repositories r ON n.repository_id = r.id
-            WHERE n.node_type IN ({','.join('?' for _ in EMBEDDABLE_TYPES)})
+            WHERE n.node_type IN ({placeholders})
             {repo_filter}
             AND n.id NOT IN (SELECT node_id FROM embeddings WHERE model = ?)
          """,
-        [*EMBEDDABLE_TYPES, *params, EMBEDDING_MODEL],
+        [*embeddable_types_list, *params, EMBEDDING_MODEL],
     ).fetchall()
 
     if not rows:
         conn.close()
-        return 0
+        return 0, 0
 
     texts: list[str] = []
     node_ids: list[int] = []
@@ -81,16 +88,16 @@ def generate_embeddings(
     vectors = list(tqdm(model.embed(texts), desc="Embedding", total=len(texts), unit="vec"))
 
     conn.executemany(
-        "INSERT INTO embeddings (node_id, model, vector) VALUES (?, ?, ?)",
+        "INSERT OR IGNORE INTO embeddings (node_id, model, vector) VALUES (?, ?, ?)",
         [
             (node_id, EMBEDDING_MODEL, np.array(vector, dtype=np.float32).tobytes())
             for node_id, vector in zip(node_ids, vectors)
         ],
     )
-
     conn.commit()
     conn.close()
-    return len(node_ids)
+
+    return len(node_ids), 0
 
 
 def _load_vectors(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -23,9 +24,17 @@ def generate_summary(
             (repo_name,),
         ).fetchone()
     else:
+        cwd = os.getcwd()
         repo = conn.execute(
-            "SELECT id, name, path FROM repositories ORDER BY id DESC LIMIT 1"
+            "SELECT id, name, path FROM repositories WHERE path = ?",
+            (cwd,),
         ).fetchone()
+        if not repo:
+            repo = conn.execute(
+                "SELECT id, name, path FROM repositories "
+                "ORDER BY (SELECT COUNT(*) FROM nodes WHERE repository_id = repositories.id) DESC "
+                "LIMIT 1"
+            ).fetchone()
 
     if not repo:
         conn.close()
