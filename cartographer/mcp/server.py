@@ -346,6 +346,10 @@ def main(db_path: Path | None = None) -> None:
     global _CUSTOM_DB_PATH
     if db_path is not None:
         _CUSTOM_DB_PATH = db_path
+    from cartographer.storage.connection import init_schema
+    conn = _get_conn()
+    init_schema(conn)
+    conn.close()
     mcp().run()
 
 
