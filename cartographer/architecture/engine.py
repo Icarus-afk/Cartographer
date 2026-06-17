@@ -434,7 +434,7 @@ def _detect_framework_from_graph(
 # ─── main detection ──────────────────────────────────────────────────────────
 
 def detect_architecture(
-    db_path: Path,
+    db_path: str | Path,
     repo_name: str | None = None,
 ) -> dict[str, Any]:
     conn = get_connection(db_path)

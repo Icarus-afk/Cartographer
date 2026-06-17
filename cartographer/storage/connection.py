@@ -8,7 +8,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = Path.home() / ".cartographer" / "index.db"
 
 
-def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
+def get_connection(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
+    db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA journal_mode=WAL")
