@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from cartographer.core.models import EntityKind, ParsedEntity, ParsedFile, RepositoryManifest
+from cartographer.embedding.engine import invalidate_cache
 from cartographer.storage.connection import get_connection, init_schema
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ def build_graph(
         "DELETE FROM embeddings WHERE node_id IN (SELECT id FROM nodes WHERE repository_id = ?)",
         (repo_id,),
     )
+    invalidate_cache(db_path)  # embeddings changed, drop in-memory cache
     conn.execute(
         "DELETE FROM architecture WHERE repository_id = ?", (repo_id,)
     )

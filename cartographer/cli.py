@@ -15,7 +15,7 @@ logging.basicConfig(
 from cartographer.architecture.engine import detect_architecture, get_architecture
 from cartographer.compression.engine import build_context_package, compress
 from cartographer.core.models import EntityKind
-from cartographer.embedding.engine import find_similar, generate_embeddings, similarity_search
+from cartographer.embedding.engine import find_similar, generate_embeddings, invalidate_cache, similarity_search
 from cartographer.git.engine import (
     author_impact,
     co_change_analysis,
@@ -944,6 +944,7 @@ def repo_remove(ctx, name, yes):
     )
     conn.execute("DELETE FROM commits WHERE repository_id = ?", (repo_id,))
     conn.execute("DELETE FROM architecture WHERE repository_id = ?", (repo_id,))
+    invalidate_cache(ctx.obj["db_path"], name)
     conn.execute(
         "DELETE FROM embeddings WHERE node_id IN"
         " (SELECT id FROM nodes WHERE repository_id = ?)",

@@ -17,6 +17,7 @@ dependencies = [
     "pyyaml>=6.0",
     "packaging>=24.0",
     "fastembed>=0.8.0",
+    "python-dotenv>=1.0",
     "tqdm>=4.66",
     "mcp>=1.0.0",
     "pathspec>=0.12",

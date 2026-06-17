@@ -114,7 +114,7 @@ def test_index_repository_graph_persisted():
 def test_index_repository_with_parse_errors():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        (root / "bad.py").write_text("def broken(\n")
+        (root / "bad.py").write_text("def broken(:\n    pass\n")
         (root / "good.py").write_text("x = 1\n")
 
         db_path = Path(td) / "test.db"
