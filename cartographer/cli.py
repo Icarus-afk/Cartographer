@@ -944,6 +944,117 @@ def graph_data(ctx, repo, limit):
     }))
 
 
+# ── watch command ────────────────────────────────────────────────────────────
+
+
+@main.command()
+@click.argument("path", default=".", type=click.Path(exists=True, file_okay=False))
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed change info")
+@click.pass_context
+def watch(ctx, path, verbose):
+    """Watch a repository for file changes and auto-update the graph.
+
+    Incrementally re-indexes and re-embeds files as they are modified,
+    created, or deleted. Uses watchdog for filesystem monitoring.
+    """
+    db_path = ctx.obj["db_path"]
+    from cartographer.storage.connection import get_connection
+    _ensure_indexed(db_path)
+    try:
+        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
+    except ImportError:
+        click.echo("Watch mode requires watchdog: pip install watchdog", err=True)
+        raise click.Abort()
+
+    from cartographer.ingestion.engine import update_index
+
+    resolved = str(Path(path).resolve())
+
+    conn = get_connection(db_path)
+    repo_row = conn.execute(
+        "SELECT id, name FROM repositories WHERE path = ?", (resolved,),
+    ).fetchone()
+    conn.close()
+
+    if not repo_row:
+        click.echo(f"Repository not found at {resolved}. Run 'cartographer index' first.")
+        return
+
+    repo_name = repo_row[1]
+    _db_path = db_path
+    _resolved = resolved
+
+    class ChangeHandler(FileSystemEventHandler):
+        def on_modified(self, event):
+            if event.is_directory:
+                return
+            self._handle(event.src_path, "modified")
+
+        def on_created(self, event):
+            if event.is_directory:
+                return
+            self._handle(event.src_path, "created")
+
+        def on_deleted(self, event):
+            if event.is_directory:
+                return
+            self._handle(event.src_path, "deleted", is_deletion=True)
+
+        def on_moved(self, event):
+            if event.is_directory:
+                return
+            self._handle(event.dest_path, "moved")
+
+        @staticmethod
+        def _handle(file_path: str, change_type: str, is_deletion: bool = False):
+            if not file_path.endswith((".py", ".js", ".ts", ".tsx", ".go", ".rs",
+                                       ".java", ".kt", ".cs", ".php", ".rb",
+                                       ".c", ".cpp", ".h", ".swift", ".scala",
+                                       ".ex", ".lua", ".jl", ".zig", ".groovy")):
+                return
+            try:
+                rel = str(Path(file_path).relative_to(_resolved))
+            except ValueError:
+                return
+
+            if is_deletion:
+                from cartographer.graph.builder import delete_file_from_graph
+                conn = get_connection(_db_path)
+                repo = conn.execute(
+                    "SELECT id FROM repositories WHERE path = ?", (_resolved,),
+                ).fetchone()
+                if repo:
+                    removed = delete_file_from_graph(conn, repo[0], rel)
+                    conn.commit()
+                    conn.close()
+                    if removed:
+                        click.echo(f"  deleted: {rel} ({removed} nodes removed)")
+                return
+
+            click.echo(f"  {change_type}: {rel}", err=True)
+            result = update_index(file_path, db_path=_db_path)
+            if verbose and result.get("parse_errors"):
+                for e in result["parse_errors"]:
+                    click.echo(f"    warning: {e}", err=True)
+            nodes = result.get("nodes_added", 0)
+            if nodes:
+                click.echo(f"    graph: {result.get('nodes_removed', 0)} removed, "
+                           f"{nodes} added", err=True)
+
+    handler = ChangeHandler()
+    observer = Observer()
+    observer.schedule(handler, resolved, recursive=True)
+    observer.start()
+    click.echo(f"Watching {repo_name} for changes... (Ctrl+C to stop)")
+    try:
+        while observer.is_alive():
+            observer.join(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()
+
+
 # ── repo management ──────────────────────────────────────────────────────────
 
 

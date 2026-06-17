@@ -202,6 +202,57 @@ def generate_embeddings(
     return len(node_ids), 0
 
 
+def embed_nodes(
+    db_path: Path,
+    node_ids: list[int],
+) -> int:
+    """Generate embeddings for a specific set of node IDs."""
+    if not node_ids:
+        return 0
+    invalidate_cache(db_path)
+    from cartographer.storage.connection import get_connection
+    conn = get_connection(db_path)
+    model = _get_model()
+
+    ph = ",".join("?" for _ in node_ids)
+    rows = conn.execute(
+        f"""SELECT n.id, n.name, n.node_type, n.file_path, n.metadata_json
+            FROM nodes n
+            WHERE n.id IN ({ph})
+            AND n.node_type IN ({','.join('?' for _ in EMBEDDABLE_TYPES)})""",
+        [*node_ids, *EMBEDDABLE_TYPES],
+    ).fetchall()
+
+    if not rows:
+        conn.close()
+        return 0
+
+    texts: list[str] = []
+    ids: list[int] = []
+    for row in rows:
+        node_id, name, node_type, file_path, metadata_json = row
+        metadata = {}
+        if metadata_json:
+            try:
+                metadata = json.loads(metadata_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        texts.append(_build_node_text(name, node_type, file_path, metadata))
+        ids.append(node_id)
+
+    vectors = list(model.embed(texts, batch_size=EMBEDDING_BATCH_SIZE))
+    conn.executemany(
+        "INSERT OR REPLACE INTO embeddings (node_id, model, vector) VALUES (?, ?, ?)",
+        [
+            (node_id, EMBEDDING_MODEL, np.array(vector, dtype=np.float32).tobytes())
+            for node_id, vector in zip(ids, vectors)
+        ],
+    )
+    conn.commit()
+    conn.close()
+    return len(ids)
+
+
 @lru_cache(maxsize=128)
 def _encode_query(query: str) -> bytes:
     model = _get_model()

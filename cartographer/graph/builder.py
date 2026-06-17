@@ -292,3 +292,152 @@ def _edge_type_for(kind: EntityKind) -> str:
         EntityKind.API_ENDPOINT: "DEFINES",
     }
     return parent_types.get(kind, "CONTAINS")
+
+
+def delete_file_from_graph(
+    conn: sqlite3.Connection,
+    repo_id: int,
+    file_path: str,
+) -> int:
+    """Delete all nodes belonging to a file and return count of deleted nodes."""
+    node_ids = [
+        r[0] for r in conn.execute(
+            "SELECT id FROM nodes WHERE repository_id = ? AND file_path = ?",
+            (repo_id, file_path),
+        ).fetchall()
+    ]
+    if not node_ids:
+        return 0
+
+    ph = ",".join("?" for _ in node_ids)
+    conn.execute(
+        f"DELETE FROM embeddings WHERE node_id IN ({ph})", node_ids
+    )
+    conn.execute(
+        f"DELETE FROM edges WHERE source_node_id IN ({ph})"
+        f" OR target_node_id IN ({ph})", node_ids * 2,
+    )
+    conn.execute(
+        f"DELETE FROM nodes WHERE id IN ({ph})", node_ids,
+    )
+    return len(node_ids)
+
+
+def _ensure_dir_path_nodes(
+    conn: sqlite3.Connection,
+    repo_id: int,
+    file_path: str,
+    edge_rows: list,
+    edge_idx: list,
+    edge_base_id: int,
+) -> int | None:
+    """Create directory nodes along a file path if missing. Returns parent dir id."""
+    parts = file_path.split("/")
+    parent_id: int | None = None
+
+    for i in range(len(parts) - 1):
+        dir_path = "/".join(parts[: i + 1])
+        row = conn.execute(
+            "SELECT id FROM nodes WHERE repository_id = ? AND file_path = ?"
+            " AND node_type = 'directory'",
+            (repo_id, dir_path),
+        ).fetchone()
+        if row:
+            parent_id = row[0]
+            continue
+        cursor = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM nodes")
+        dir_id = cursor.fetchone()[0]
+        conn.execute(
+            "INSERT INTO nodes (id, repository_id, node_type, name, file_path)"
+            " VALUES (?, ?, 'directory', ?, ?)",
+            (dir_id, repo_id, parts[i], dir_path),
+        )
+        if parent_id is not None:
+            edge_idx[0] += 1
+            edge_rows.append(
+                (edge_base_id + edge_idx[0] - 1, repo_id, parent_id, dir_id, "CONTAINS"),
+            )
+        parent_id = dir_id
+
+    return parent_id
+
+
+def update_file_in_graph(
+    db_path: Path,
+    repo_path: str,
+    parsed_file: ParsedFile,
+) -> dict[str, int]:
+    """Incrementally update a single file in the graph.
+
+    Deletes old nodes for the file, inserts new ones, and re-embeds.
+    Returns stats dict with nodes_added, nodes_removed, edges_added.
+    """
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    repo_id = _ensure_repository(conn, repo_path)
+    file_path = parsed_file.path
+
+    removed = delete_file_from_graph(conn, repo_id, file_path)
+
+    # Now insert the updated file
+    _reclassify_entities([parsed_file])
+
+    cursor = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM nodes")
+    base_id = cursor.fetchone()[0]
+    cursor = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM edges")
+    edge_base_id = cursor.fetchone()[0]
+
+    node_rows: list[tuple[int, int, str, str, str, str | None]] = []
+    edge_rows: list[tuple[int, int, int, int, str]] = []
+    name_to_entity_ids: dict[str, list[int]] = defaultdict(list)
+    edge_idx = [0]
+    node_idx = [0]
+
+    def _batch_node(kind: EntityKind, name: str, fpath: str, metadata: dict) -> int:
+        node_idx[0] += 1
+        actual_id = base_id + node_idx[0] - 1
+        node_rows.append((
+            actual_id, repo_id, kind.value, name, fpath,
+            json.dumps(metadata) if metadata else None,
+        ))
+        name_to_entity_ids[name].append(actual_id)
+        return actual_id
+
+    def _batch_edge(src: int, tgt: int, etype: str) -> None:
+        edge_idx[0] += 1
+        actual_id = edge_base_id + edge_idx[0] - 1
+        edge_rows.append((actual_id, repo_id, src, tgt, etype))
+
+    parent_id = _ensure_dir_path_nodes(conn, repo_id, file_path, edge_rows, edge_idx, edge_base_id)
+
+    file_id = _batch_node(EntityKind.FILE, file_path, file_path,
+                          {"language": parsed_file.language.value})
+    if parent_id is not None:
+        _batch_edge(parent_id, file_id, "CONTAINS")
+
+    for entity in parsed_file.entities:
+        _process_entity(entity, {}, file_id, file_path, _batch_node, _batch_edge)
+
+    # Resolve relationships within the file
+    _resolve_entity_relationships(parsed_file.entities, name_to_entity_ids, {}, _batch_edge)
+
+    if node_rows:
+        conn.executemany(
+            "INSERT INTO nodes (id, repository_id, node_type, name, file_path, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)", node_rows,
+        )
+    if edge_rows:
+        conn.executemany(
+            "INSERT INTO edges (id, repository_id, source_node_id, target_node_id, edge_type) "
+            "VALUES (?, ?, ?, ?, ?)", edge_rows,
+        )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "nodes_removed": removed,
+        "nodes_added": len(node_rows),
+        "edges_added": len(edge_rows),
+    }

@@ -211,3 +211,81 @@ def _parse_repository(
 
     logger.info("Parsing complete: %d/%d files parsed", len(parsed_files), total)
     return parsed_files
+
+
+def update_index(
+    path: str | Path,
+    db_path: Path | None = None,
+) -> dict:
+    """Incrementally re-index a single file after changes.
+
+    Re-parses the file, updates the graph, and re-embeds changed nodes.
+    Returns stats about what changed.
+    """
+    root = Path(path).resolve()
+    if not root.exists():
+        return {"error": f"Path does not exist: {root}"}
+
+    from cartographer.embedding.engine import generate_embeddings
+    from cartographer.graph.builder import update_file_in_graph
+
+    if db_path is None:
+        db_path = Path.home() / ".cartographer" / "index.db"
+    else:
+        db_path = Path(db_path)
+
+    from cartographer.storage.connection import get_connection, init_schema
+    conn = get_connection(db_path)
+    init_schema(conn)
+    repo_row = conn.execute(
+        "SELECT id, path FROM repositories WHERE path = ?",
+        (str(root.parent if root.is_file() else root),),
+    ).fetchone()
+    conn.close()
+
+    if not repo_row:
+        return {"error": "Repository not indexed. Run 'cartographer index' first."}
+
+    repo_path = repo_row[1]
+    rel_path = str(root.relative_to(repo_path)) if root.is_file() else ""
+
+    if not root.is_file():
+        return {"error": f"Not a file: {root}"}
+
+    ext = root.suffix.lower()
+    from cartographer.core.models import LANGUAGE_EXTENSIONS
+    lang = Language.UNKNOWN
+    for known_lang, exts in LANGUAGE_EXTENSIONS.items():
+        if ext in exts:
+            lang = known_lang
+            break
+
+    if lang == Language.UNKNOWN:
+        return {"error": f"Unsupported file type: {ext}"}
+
+    parser = get_parser(lang)
+    if not parser:
+        return {"error": f"No parser for {lang.value}"}
+
+    source, parse_errors = parser.parse_file(root)
+    if not source:
+        return {"error": f"Failed to parse {root}", "parse_errors": parse_errors}
+
+    entities = parser.extract_entities(source, rel_path)
+    parsed_file = ParsedFile(path=rel_path, language=lang, entities=entities)
+
+    stats = update_file_in_graph(Path(db_path), repo_path, parsed_file)
+
+    # Re-embed the changed nodes
+    embed_count = 0
+    if stats.get("nodes_added", 0) > 0:
+        new_count, _ = generate_embeddings(Path(db_path))
+        embed_count = new_count
+
+    return {
+        **stats,
+        "file": rel_path,
+        "language": lang.value,
+        "embeddings_generated": embed_count,
+        "parse_errors": parse_errors,
+    }

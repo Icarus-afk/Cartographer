@@ -41,6 +41,9 @@ dependencies = [
     "tree-sitter-zig>=1.0.0",
     "tree-sitter-groovy>=0.1.0",
 ]
+
+[project.optional-dependencies]
+watch = ["watchdog>=4.0"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
