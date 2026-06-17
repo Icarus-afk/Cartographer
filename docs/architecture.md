@@ -17,7 +17,7 @@ Repository (files on disk)
          │
          ▼
 ┌─────────────────┐
-│  Parser Engine  │  19 language parsers (Tree-sitter), entity extraction
+│  Parser Engine  │  20 language parsers (Tree-sitter), entity extraction
 │                 │  (classes, functions, methods, interfaces, enums, etc.)
 └────────┬────────┘
          │
@@ -161,7 +161,7 @@ BaseParser (abstract)
  ├── GoParser
  ├── RustParser
  ├── ...
- └── GroovyParser (19 total)
+ └── GroovyParser (20 total)
 ```
 
 ### Entity Types
@@ -218,7 +218,7 @@ Extends TypeScriptParser with JSX handling. Captures top-level JSX expressions:
 | `expression_statement` → `jsx_element` | CONSTANT (tag name) | `<App />` at module root |
 | `expression_statement` → `jsx_self_closing_element` | CONSTANT (tag name) | `<Header />` at module root |
 
-### All 19 Parsers
+### All 20 Parsers
 
 | Parser | File | Tree-sitter Grammar |
 |---|---|---|
@@ -273,7 +273,7 @@ IMPORT_PATTERNS = {
         (r'^\s*use\s+(\S[^;]*)', 1),
         (r'^\s*extern\s+crate\s+(\S+)', 1),
     ],
-    # ... 19 languages
+    # ... 20 languages
 }
 ```
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -593,19 +594,31 @@ def query(ctx, query_str, repo, limit, max_tokens, verbose):
         click.echo(f"Query failed: {e}", err=True)
 
 
-# ── mcp command ────────────────────────────────────────────────────────────────
+# ── mcp commands ────────────────────────────────────────────────────────────────
+
+MCP_PID_FILE = Path.home() / ".cartographer" / "mcp.pid"
 
 
-@main.command()
+@main.group()
+def mcp():
+    """MCP server commands for AI assistant integration."""
+    pass
+
+
+@mcp.command()
 @click.option("--db", default=None, help="Database path", envvar="CARTOGRAPHER_DB")
-def mcp(db):
-    """Run the MCP server for AI assistant integration.
+@click.option("--port", default=None, type=int, help="Run as SSE server on port (e.g. 8080)")
+@click.option("--verbose", is_flag=True, help="Show server logs on stderr")
+@click.option("--log-file", default=None, help="Write logs to file", type=click.Path())
+def start(db, port, verbose, log_file):
+    """Start the MCP server for AI assistant integration.
 
-    Starts a Model Context Protocol server that exposes Cartographer's
+    Runs a Model Context Protocol server that exposes Cartographer's
     knowledge graph as tools for AI assistants (Claude Desktop, Cursor, etc.).
 
-    Configure your AI assistant client to use this server:
+    Configure your AI assistant client to use the 'cartographer-mcp' entry point:
 
+    \b
     Claude Desktop (claude_desktop_config.json):
     {
       "mcpServers": {
@@ -616,6 +629,7 @@ def mcp(db):
       }
     }
 
+    \b
     Cursor:
     {
       "mcpServers": {
@@ -626,9 +640,56 @@ def mcp(db):
       }
     }
     """
+    MCP_PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    if MCP_PID_FILE.exists():
+        try:
+            pid = int(MCP_PID_FILE.read_text().strip())
+            os.kill(pid, 0)
+            click.echo(f"MCP server already running (PID {pid})", err=True)
+            return
+        except (OSError, ValueError):
+            MCP_PID_FILE.unlink(missing_ok=True)
+
+    MCP_PID_FILE.write_text(str(os.getpid()))
+
+    if verbose or log_file:
+        logger = logging.getLogger("cartographer.mcp")
+        logger.setLevel(logging.INFO)
+        if log_file:
+            handler = logging.FileHandler(log_file)
+        else:
+            handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        ))
+        logger.addHandler(handler)
+
     from cartographer.mcp.server import main as mcp_main
     db_path = Path(db) if db else None
-    mcp_main(db_path)
+    try:
+        click.echo(f"MCP server starting (PID {os.getpid()})", err=True)
+        mcp_main(db_path, port=port)
+    finally:
+        MCP_PID_FILE.unlink(missing_ok=True)
+
+
+@mcp.command()
+def stop():
+    """Stop a running MCP server."""
+    if not MCP_PID_FILE.exists():
+        click.echo("No MCP server running (PID file not found)", err=True)
+        return
+    try:
+        pid = int(MCP_PID_FILE.read_text().strip())
+        os.kill(pid, 15)
+        MCP_PID_FILE.unlink(missing_ok=True)
+        click.echo(f"Stopped MCP server (PID {pid})", err=True)
+    except ProcessLookupError:
+        MCP_PID_FILE.unlink(missing_ok=True)
+        click.echo("MCP server was not running (stale PID file cleaned up)", err=True)
+    except (OSError, ValueError) as e:
+        click.echo(f"Failed to stop MCP server: {e}", err=True)
 
 
 # ── git commands ──────────────────────────────────────────────────────────────

@@ -46,13 +46,22 @@ Available commands:
 | Dependency | Purpose |
 |---|---|
 | Python 3.11+ | Runtime |
-| Tree-sitter 0.23+ | AST parsing for 19 languages |
+| click 8.1+ | CLI framework |
+| Tree-sitter 0.23+ | AST parsing for 20 languages |
+| mcp 1.0+ | Model Context Protocol server |
+| fastembed 0.8+ | Vector embeddings for semantic search |
+| pathspec | `.gitignore` pattern matching |
+| pyyaml 6+ | YAML config support |
+| packaging 24+ | Package version detection |
+| python-dotenv 1.0+ | `.env` file loading |
+| tqdm | Progress bars |
+| numpy | Batched similarity computation |
 | fastembed 0.8+ | Vector embeddings for semantic search |
 | pathspec | `.gitignore` pattern matching |
 | pyyaml 6+ | YAML config support |
 | packaging 24+ | Package version detection |
 
-Tree-sitter language grammars are downloaded on demand when you index a file in that language. The embedding model (`BAAI/bge-small-en-v1.5`, ~33MB) downloads on first `cartographer embed`.
+Tree-sitter language grammars are downloaded on demand when you index a file in that language. The embedding model (default `BAAI/bge-small-en-v1.5`, ~33MB) downloads on first `cartographer embed`. Model and batch size are configurable via environment variables (see `.env.example`).
 
 ---
 
@@ -168,6 +177,7 @@ Starts a Model Context Protocol server that exposes all Cartographer tools to AI
 
 | Command | Description |
 |---|---|
+| `init` | Initialize and index a repository |
 | `index` | Index a repository into the knowledge graph |
 | `ask` | Search the graph (text or `--semantic`) |
 | `query` | Natural language query with auto intent detection |
@@ -175,32 +185,44 @@ Starts a Model Context Protocol server that exposes all Cartographer tools to AI
 | `neighbors` | Show neighbors of a node |
 | `path` | Find shortest path between two nodes |
 | `summarize` | Generate repository summary |
-| `architecture` | Detect or show repository architecture |
+| `context` | Generate a structured context package (summary + architecture + key nodes) |
 | `embed` | Generate vector embeddings for semantic search |
 | `similar` | Find semantically similar nodes |
+| `architecture` | Detect or show repository architecture |
+| `graph-data` | Export graph as JSON for VS Code extension |
 | `git index` | Index git history (commits, authors, changes) |
 | `git blame` | Show commit history for a file or symbol |
 | `git author` | Show an author's contributions |
 | `git cochange` | Find files that change together |
 | `git why` | Find which commit introduced a symbol |
 | `git authors` | List all authors |
-| `mcp` | Start MCP server for AI assistant integration |
+| `mcp start` | Start MCP server for AI assistant integration |
+| `mcp stop` | Stop a running MCP server |
+| `repo list` | List all indexed repositories |
+| `repo remove` | Remove a repository and its data |
+| `db vacuum` | Reclaim storage space (VACUUM) |
+| `db info` | Show database statistics |
 | `version` | Show version |
 
 ### Common options
 
-- `--db PATH`, `CARTOGRAPHER_DB` env var — specify database path
-- `--repo`, `-r` — filter by repository name
+- `--db PATH`, `CARTOGRAPHER_DB` env var — specify database path (default: `~/.cartographer/index.db`)
+- `--repo`, `-r` — filter by repository name (for multi-repo databases)
 - `--max-tokens`, `-m` — compress output to fit a token budget (for LLM context windows)
+- `--limit`, `-l` — limit number of results
+- `--type`, `-t` — filter by node type
 
 ---
 
 ## Configuration
 
 | Environment Variable | Default | Description |
-|---|---|---|
+|---|---|---|---|
 | `CARTOGRAPHER_DB` | `~/.cartographer/index.db` | Path to the SQLite database |
-| `HF_TOKEN` | (none) | HuggingFace token for model download |
+| `CARTOGRAPHER_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model name (HuggingFace) |
+| `CARTOGRAPHER_EMBEDDING_DIM` | `384` | Model output dimension |
+| `CARTOGRAPHER_EMBEDDING_BATCH_SIZE` | `256` | Embedding batch size |
+| `CARTOGRAPHER_EMBEDDING_PARALLELISM` | `0` | CPU threads (0 = auto) |
 
 ---
 
@@ -209,7 +231,7 @@ Starts a Model Context Protocol server that exposes all Cartographer tools to AI
 Cartographer has a modular pipeline architecture:
 
 1. **Ingestion Engine** — walks the file tree, detects languages and frameworks, skips binaries and ignored files (`.gitignore` + `.cartographerignore`)
-2. **Parser Engine** — 19 Tree-sitter language parsers (Python, JS, TS/TSX, Go, Rust, Java, Kotlin, C#, PHP, Ruby, C, C++, Swift, Scala, Elixir, Lua, Julia, Zig, Groovy)
+2. **Parser Engine** — 20 Tree-sitter language parsers (Python, JS, TS/TSX, Go, Rust, Java, Kotlin, C#, PHP, Ruby, C, C++, Swift, Scala, Elixir, Lua, Julia, Zig, Groovy)
 3. **Graph Engine** — SQLite persistence with nodes, edges, directories, embeddings, and git metadata
 4. **Retrieval Engine** — search, traversal, impact analysis, path finding, summarization
 5. **Architecture Engine** — multi-strategy layer detection, pattern matching, dependency flow

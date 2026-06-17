@@ -127,7 +127,7 @@ Repository
 | Subsystem | Location | Responsibility |
 |---|---|---|---|
 | Ingestion Engine | `cartographer/ingestion/` | Discover files, detect languages/frameworks, extract references, handle gitignore |
-| Parser Engine | `cartographer/parser/` | Tree-sitter AST extraction for 19 languages |
+| Parser Engine | `cartographer/parser/` | Tree-sitter AST extraction for 20 languages |
 | VS Code Extension | `editors/vscode/` | Repository intelligence in the editor |
 | Graph Engine | `cartographer/graph/` | Build and persist knowledge graph (nodes + edges) |
 | Embedding Engine | `cartographer/embedding/` | Generate 384-dim vector embeddings, numpy-batched similarity |
@@ -200,7 +200,7 @@ Root `.gitignore` is parsed via the `pathspec` library (gitwildmatch format) and
 
 ### Language Detection
 
-Maps file extensions to `Language` enum (20 extensions across 19 languages + TSX). Unknown extensions are skipped silently.
+Maps file extensions to `Language` enum (32 extensions across 20 languages). Unknown extensions are skipped silently.
 
 ### Framework Fingerprinting
 
@@ -246,7 +246,7 @@ Schema entities are added as children of their model classes (Django/JPA) or as 
 
 ### Reference Extraction (`references.py`)
 
-Cross-file import resolution for 19 languages. Uses regex patterns to extract import statements, then resolves candidates via a precomputed suffix index (`_build_suffix_index`) with O(1) dict lookups instead of O(n×m) linear `endswith` scans across all candidate files. Includes case-insensitive fallback.
+Cross-file import resolution for 20 languages. Uses regex patterns to extract import statements, then resolves candidates via a precomputed suffix index (`_build_suffix_index`) with O(1) dict lookups instead of O(n×m) linear `endswith` scans across all candidate files. Includes case-insensitive fallback.
 
 **IMPORT_PATTERNS** — language-specific regex patterns. Examples:
 - Python: `from ([\w.]+) import|import ([\w.]+)`
@@ -285,7 +285,7 @@ BaseParser (abstract)
  ├── LuaParser
  ├── JuliaParser
  ├── ZigParser
- └── GroovyParser (19 total)
+ └── GroovyParser (20 total)
 ```
 
 ### Base Parser (`base.py`)
@@ -361,7 +361,7 @@ Extends TypeScriptParser with JSX handling:
 
 Captures top-level JSX expressions like `<App />` and `<Header>` at module root level.
 
-### All 19 Parsers
+### All 20 Parsers
 
 | Parser | File | Tree-sitter Grammar Package |
 |---|---|---|
@@ -878,10 +878,11 @@ Configure Claude Desktop, Cursor, or OpenCode to connect:
 
 **Location:** `cartographer/cli.py`
 
-### Commands (17 total)
+### Commands (26 total)
 
 | Command | Description | Options |
-|---|---|---|
+|---|---|---|---|
+| `cartographer init [PATH]` | Initialize and index a repo | `--force` |
 | `cartographer index [PATH]` | Index a repository | (none) |
 | `cartographer ask QUERY` | Search the graph | `--type`, `--repo`, `--limit`, `--semantic`, `--max-tokens` |
 | `cartographer query QUERY_STR` | Natural language query | `--repo`, `--limit`, `--max-tokens`, `--verbose` |
@@ -889,18 +890,24 @@ Configure Claude Desktop, Cursor, or OpenCode to connect:
 | `cartographer neighbors NAME` | Graph neighbors | `--repo`, `--depth`, `--max-tokens` |
 | `cartographer path FROM TO` | Path between nodes | `--max-depth`, `--max-tokens` |
 | `cartographer summarize` | Repo summary | `--repo`, `--max-tokens` |
+| `cartographer context` | Context package | `--repo`, `--max-tokens`, `--top-n` |
 | `cartographer embed` | Generate embeddings | `--repo` |
 | `cartographer similar TARGET` | Semantic similarity | `--repo`, `--limit` |
-| `cartographer context` | Context package (summary + architecture + key nodes) | `--repo`, `--max-tokens`, `--top-n` |
 | `cartographer architecture` | Architecture | `--detect`, `--repo`, `--verbose` |
-| `cartographer mcp` | Run MCP server | `--db` |
+| `cartographer graph-data` | Export graph as JSON (for VS Code) | `--repo`, `--limit` |
 | `cartographer version` | Show version | (none) |
+| `cartographer mcp start` | Start MCP server | `--db`, `--port`, `--verbose`, `--log-file` |
+| `cartographer mcp stop` | Stop running MCP server | (none) |
 | `cartographer git index` | Index git history | `--repo-path`, `--repo`, `--max-count` |
 | `cartographer git blame TARGET` | Commit history | `--repo`, `--limit` |
 | `cartographer git author NAME` | Author contributions | `--repo`, `--limit` |
 | `cartographer git cochange TARGET` | Co-change analysis | `--repo`, `--limit` |
 | `cartographer git why TARGET` | Why-introduced | `--repo` |
 | `cartographer git authors` | List authors | `--repo`, `--limit` |
+| `cartographer repo list` | List indexed repos | (none) |
+| `cartographer repo remove NAME` | Remove a repo and its data | `--yes` |
+| `cartographer db vacuum` | VACUUM the database | (none) |
+| `cartographer db info` | Show DB statistics | (none) |
 
 All commands use `get_connection()` for WAL-mode DB access.
 
@@ -977,7 +984,7 @@ Semantic: SIMILAR_TO, RELATED_TO, DUPLICATES, PATTERN_MATCH
 
 | File | Tests | What It Tests |
 |---|---|---|
-| `test_parsers.py` | 44+ | All 19 parsers construct, snippets parse, empty source, binary detection, ignore patterns, TypeScript generics, interfaces, type aliases, enums, JSX, default exports, .gitignore |
+| `test_parsers.py` | 44+ | All 20 parsers construct, snippets parse, empty source, binary detection, ignore patterns, TypeScript generics, interfaces, type aliases, enums, JSX, default exports, .gitignore |
 | `test_integration.py` | 15 | File discovery, .cartographerignore, full index pipeline, graph persistence, parse errors |
 | `test_compression.py` | 7 | All 4 compression strategies, auto-dispatch |
 | `test_query.py` | 7 | Intent classification for all 9 types |
@@ -1077,4 +1084,4 @@ Find duplicated validation logic.
 
 **Last updated:** 2026-06-14
 **Tests:** 73 passing, lint clean
-**Verified on:** 14 repos across 12 languages
+**Verified on:** 22 repos across 17 languages

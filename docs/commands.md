@@ -15,6 +15,31 @@ Every command supports these global options, specified before the subcommand:
 
 ---
 
+## cartographer init
+
+**Purpose:** Initialize Cartographer for a project. Sets up the database and indexes the repository. If a repo is already indexed, it will warn you and suggest using `cartographer index .` to re-index or `cartographer init . --force` to start fresh.
+
+```bash
+cartographer init [OPTIONS] [PATH]
+
+Options:
+  -f, --force    Re-index even if already indexed
+
+Examples:
+  cartographer init .                         # Initialize current directory
+  cartographer init /path/to/repo             # Initialize a specific repo
+  cartographer init . --force                 # Re-index from scratch
+```
+
+### What happens
+
+1. Creates the database schema if it doesn't exist
+2. Checks if the repository is already indexed
+3. Runs the full indexing pipeline (file discovery, parsing, graph building)
+4. Shows next steps (embed, git index, ask, graph-data)
+
+---
+
 ## cartographer index
 
 **Purpose:** Index a repository into the knowledge graph. This is the first command you run — it discovers files, parses them, extracts entities, resolves cross-file references, and builds the graph.
@@ -31,7 +56,7 @@ cartographer --db /tmp/my.db index ./project  # Use custom database
 ### What happens during indexing
 
 1. **File discovery** — walks the directory tree recursively, skipping binaries, hidden dirs, ignored patterns (`.gitignore` + `.cartographerignore`), and 23 standard ignored directories
-2. **Language detection** — maps file extensions to languages using a built-in dictionary of 30+ extensions across 19 languages
+2. **Language detection** — maps file extensions to languages using a built-in dictionary of 32 extensions across 20 languages
 3. **Framework fingerprinting** — checks for indicator files (`manage.py`, `package.json`, `Cargo.toml`, etc.) and parses config files to detect frameworks (Django, Flask, Rails, Spring Boot, Express, Next.js, NestJS, React, Vue, Laravel, Actix Web, Axum, FastAPI, and more)
 4. **Package manager detection** — finds `package.json`, `Cargo.toml`, `requirements.txt`, `Gemfile`, `Pipfile`, `composer.json`, etc.
 5. **Build system detection** — finds `Makefile`, `CMakeLists.txt`, `setup.py`, `pyproject.toml`, `build.gradle`, `pom.xml`
@@ -526,20 +551,38 @@ Examples:
 
 ---
 
-## cartographer mcp
+## cartographer mcp start
 
 **Purpose:** Start the MCP (Model Context Protocol) server for AI assistant integration. This exposes all Cartographer tools to AI coding assistants like Claude Desktop, Cursor, and OpenCode.
 
 ```bash
-cartographer mcp [OPTIONS]
+cartographer mcp start [OPTIONS]
 
 Options:
   --db PATH               Database path (default: ~/.cartographer/index.db)
+  --port INT              Run as SSE server on port (e.g., 8080)
+  --verbose               Show server logs on stderr
+  --log-file PATH         Write logs to file
 
 Examples:
-  cartographer mcp
-  cartographer --db /tmp/my.db mcp
+  cartographer mcp start
+  cartographer mcp start --port 8080              # SSE mode
+  cartographer mcp start --verbose                # With logs
+  cartographer --db /tmp/my.db mcp start          # Custom DB
 ```
+
+### cartographer mcp stop
+
+**Purpose:** Stop a running MCP server.
+
+```bash
+cartographer mcp stop
+
+Examples:
+  cartographer mcp stop
+```
+
+Stops the server by sending SIGTERM to the process whose PID is stored in `~/.cartographer/mcp.pid`.
 
 ### What it exposes
 
@@ -577,6 +620,112 @@ The `--db` flag is forwarded to the MCP server and used for all database connect
 ### Connection Settings
 
 All MCP connections use WAL mode, foreign keys enabled, synchronous=NORMAL, and a 5-second busy timeout.
+
+---
+
+## cartographer context
+
+**Purpose:** Generate a structured context package combining graph summary, architecture, and key nodes. Designed for LLM context windows where you need a comprehensive snapshot within a token budget.
+
+```bash
+cartographer context [OPTIONS]
+
+Options:
+  -r, --repo TEXT         Repository name
+  -m, --max-tokens INT    Token budget (default: 1500)
+  --top-n INT             Number of key nodes to include (default: 10)
+
+Examples:
+  cartographer context
+  cartographer context -m 3000 -r myproject
+```
+
+Internally builds a three-section output:
+1. **Graph Summary** — repo name, node/edge counts, breakdowns
+2. **Architecture** — detected layers, patterns, frameworks
+3. **Key Nodes** — top-N search results by relevance
+
+---
+
+## cartographer graph-data
+
+**Purpose:** Output graph data as JSON for the VS Code extension's interactive visualization. Uses degree-weighted sampling to produce a connected subgraph.
+
+```bash
+cartographer graph-data [OPTIONS]
+
+Options:
+  -r, --repo TEXT         Repository name
+  -l, --limit INT         Max nodes to sample (default: 80)
+
+Examples:
+  cartographer graph-data
+  cartographer graph-data -r myproject -l 150
+```
+
+Returns JSON with `total_nodes`, `total_edges`, `node_types` summary, and sampled `nodes`/`edges` arrays.
+
+---
+
+## cartographer repo list
+
+**Purpose:** List all indexed repositories with node/edge counts.
+
+```bash
+cartographer repo list
+
+Examples:
+  cartographer repo list
+```
+
+Output shows a table with repository name, node count, edge count, and path.
+
+---
+
+## cartographer repo remove
+
+**Purpose:** Remove a repository and all its data (nodes, edges, embeddings, git history) from the database.
+
+```bash
+cartographer repo remove [OPTIONS] NAME
+
+Options:
+  -y, --yes               Skip confirmation prompt
+
+Examples:
+  cartographer repo remove myproject
+  cartographer repo remove myproject -y
+```
+
+---
+
+## cartographer db vacuum
+
+**Purpose:** Reclaim storage space by running VACUUM on the SQLite database.
+
+```bash
+cartographer db vacuum
+
+Examples:
+  cartographer db vacuum
+```
+
+Shows database size before and after, including space saved.
+
+---
+
+## cartographer db info
+
+**Purpose:** Show database statistics — total nodes, edges, embeddings, commits, and per-repository breakdowns.
+
+```bash
+cartographer db info
+
+Examples:
+  cartographer db info
+```
+
+Output includes database path, file size, total counts, and per-repository node/edge counts.
 
 ---
 

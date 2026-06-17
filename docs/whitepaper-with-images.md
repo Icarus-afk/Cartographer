@@ -37,7 +37,7 @@ This tax compounds:
 | **Static analysis tools** | Single-language, batch-only, no interactive query |
 | **Dumping full source to LLM** | Context-window constrained, expensive, no structural indexing |
 
-Cartographer fills this gap: it is language-agnostic (19 parsers), persistent (SQLite graph), queryable (17 CLI commands + MCP), and designed specifically to feed structured knowledge to LLMs.
+Cartographer fills this gap: it is language-agnostic (20 parsers), persistent (SQLite graph), queryable (26 CLI commands + MCP), and designed specifically to feed structured knowledge to LLMs.
 
 ---
 
@@ -45,11 +45,11 @@ Cartographer fills this gap: it is language-agnostic (19 parsers), persistent (S
 
 Cartographer is a **Repository Intelligence Operating System** — a layered system that:
 
-1. **Indexes** any codebase (19 languages, any framework)
+1. **Indexes** any codebase (20 languages, any framework)
 2. **Parses** every file into typed AST entities (classes, functions, methods, interfaces, enums, constants, variables, API endpoints, tables)
 3. **Links** entities across files via reference resolution (IMPORTS, DEFINES, CONTAINS, CALLS, INHERITS, IMPLEMENTS, DECLARES edges)
 4. **Stores** the graph in a portable SQLite database (~310 bytes/node)
-5. **Queries** via 17 CLI commands, a VS Code extension with D3 graph visualization, and a full MCP server
+5. **Queries** via 26 CLI commands, a VS Code extension with D3 graph visualization, and a full MCP server
 6. **Compresses** output to fit arbitrary token budgets (200–8,000 tokens) for LLM context windows
 7. **Embeds** nodes for semantic similarity search using `bge-small-en-v1.5` (384-dim, ONNX, numpy-batched at 280x speedup)
 
@@ -58,7 +58,7 @@ Cartographer is a **Repository Intelligence Operating System** — a layered sys
 | Decision | Rationale |
 |---|---|
 | **SQLite storage** | Zero infrastructure, portable file, concurrent reads, JSON output |
-| **Tree-sitter parsing** | 19 languages, fault-tolerant, incremental, no per-language runtime |
+| **Tree-sitter parsing** | 20 languages, fault-tolerant, incremental, no per-language runtime |
 | **ThreadPoolExecutor** | Responsive indexing (2 workers max) — no CPU pegging on laptops |
 | **Degree-weighted sampling** | Graph visualization picks high-connectivity nodes so edges appear |
 | **Numpy-batched similarity** | 280x faster than Python-loop cosine similarity |
@@ -97,7 +97,7 @@ Cartographer's pipeline is modular, with 10 engines connected in sequence:
 1. **File discovery**: Walk directory tree, apply `.gitignore` + `.cartographerignore`, skip binaries via extension whitelist + null-byte check (8KB sample)
 2. **Language detection**: Map file extension → language (e.g., `.tsx` → TypeScript/TSX)
 3. **Framework detection**: Fingerprint `package.json`, `requirements.txt`, `Cargo.toml`, etc.
-4. **Parsing**: Each file parsed by Tree-sitter into AST; entities extracted via language-specific queries (19 languages, ~200 query patterns total)
+4. **Parsing**: Each file parsed by Tree-sitter into AST; entities extracted via language-specific queries (20 languages, ~200 query patterns total)
 5. **Reference extraction**: Resolve cross-file imports using language-specific module resolution
 6. **Graph construction**: Write nodes + edges to SQLite in batch transactions
 7. **Schema extraction**: Detect DB schemas from ORM models and raw SQL strings
@@ -454,7 +454,7 @@ DEFINES edges dominate (60–70% of all edges). IMPORTS ~25% for Python/Java.
 
 | Metric | Value |
 |---|---|
-| Languages supported | 19 |
+| Languages supported | 20 |
 | Repos benchmarked | 14 |
 | Total files indexed | 4,577 |
 | Total nodes created | 37,424 |
@@ -468,7 +468,7 @@ DEFINES edges dominate (60–70% of all edges). IMPORTS ~25% for Python/Java.
 | Semantic search speedup | 280x (numpy batch) |
 | MCP tools | 8 |
 | MCP resources | 3 |
-| CLI commands | 17 |
+| CLI commands | 26 |
 | VS Code extension commands | 15 |
 
 ---

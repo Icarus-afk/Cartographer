@@ -36,13 +36,13 @@ Cartographer installs these key dependencies automatically:
 | Dependency | What it's used for |
 |---|---|
 | **click** | Building the command-line interface |
-| **tree-sitter** | Parsing source code into syntax trees — supports 19 languages |
+| **tree-sitter** | Parsing source code into syntax trees — supports 20 languages |
 | **fastembed** | Generating vector embeddings from code for semantic search |
 | **pathspec** | Reading `.gitignore` files so Cartographer skips what Git ignores |
 | **pyyaml** | Reading YAML configuration files |
 | **packaging** | Detecting package versions |
 
-Tree-sitter language grammars (one per language) are downloaded automatically the first time you index a file written in that language. The embedding model (`BAAI/bge-small-en-v1.5`, ~33MB) downloads the first time you run `cartographer embed`.
+Tree-sitter language grammars (one per language) are downloaded automatically the first time you index a file written in that language. The embedding model (default `BAAI/bge-small-en-v1.5`, ~33MB) downloads the first time you run `cartographer embed`. The model and batch size are configurable via environment variables.
 
 ---
 
@@ -184,7 +184,10 @@ This starts a local server that exposes Cartographer's tools to AI coding assist
 | Variable | Default | Description |
 |---|---|---|
 | `CARTOGRAPHER_DB` | `~/.cartographer/index.db` | Path to the SQLite database |
-| `HF_TOKEN` | (none) | HuggingFace token for model downloads (needed for some models) |
+| `CARTOGRAPHER_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model name |
+| `CARTOGRAPHER_EMBEDDING_DIM` | `384` | Model output dimension |
+| `CARTOGRAPHER_EMBEDDING_BATCH_SIZE` | `256` | Embedding batch size |
+| `CARTOGRAPHER_EMBEDDING_PARALLELISM` | `0` | CPU threads for embedding (0 = auto) |
 
 ---
 

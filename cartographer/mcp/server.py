@@ -342,7 +342,7 @@ def ask(
     return result
 
 
-def main(db_path: Path | None = None) -> None:
+def main(db_path: Path | None = None, port: int | None = None) -> None:
     global _CUSTOM_DB_PATH
     if db_path is not None:
         _CUSTOM_DB_PATH = db_path
@@ -350,7 +350,15 @@ def main(db_path: Path | None = None) -> None:
     conn = _get_conn()
     init_schema(conn)
     conn.close()
-    mcp().run()
+    if port:
+        try:
+            import uvicorn
+        except ImportError:
+            print("--port requires uvicorn: pip install uvicorn", file=__import__("sys").stderr)
+            raise
+        uvicorn.run(mcp().sse_app(), host="127.0.0.1", port=port)
+    else:
+        mcp().run()
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ _model_lock = threading.Lock()
 
 _vector_cache: dict[tuple[str, str], tuple[np.ndarray, list[dict[str, Any]], np.ndarray]] = {}
 _vector_cache_lock = threading.Lock()
+_VECTOR_CACHE_MAX_ENTRIES = 10
 
 EMBEDDABLE_TYPES = {"class", "function", "method", "file", "interface", "enum", "type_alias"}
 
@@ -129,6 +130,8 @@ def _load_vectors(
 
     with _vector_cache_lock:
         if cache_key not in _vector_cache:
+            if len(_vector_cache) >= _VECTOR_CACHE_MAX_ENTRIES:
+                _vector_cache.pop(next(iter(_vector_cache)))
             _vector_cache[cache_key] = (vectors, records, norms)
 
     return vectors, records, norms

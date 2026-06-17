@@ -119,8 +119,9 @@ cartographer embed
 # First run downloads ~33MB model
 # Check network connectivity if it hangs
 
-# You can set a HuggingFace token if needed
-export HF_TOKEN=your_token_here
+# You can configure which model to use via env vars
+export CARTOGRAPHER_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+export CARTOGRAPHER_EMBEDDING_BATCH_SIZE=256
 ```
 
 ### Query planner gives wrong intent
@@ -238,8 +239,9 @@ To reduce size:
 The `BAAI/bge-small-en-v1.5` model is downloaded from HuggingFace on first use (~33MB):
 
 ```bash
-# Set a HuggingFace token for authenticated downloads
-export HF_TOKEN=your_token_here
+# Optionally configure the embedding model and batch size
+export CARTOGRAPHER_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+export CARTOGRAPHER_EMBEDDING_BATCH_SIZE=256
 ```
 
 If downloads are slow, check your network connection. The model only downloads once and is cached.
