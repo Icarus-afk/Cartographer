@@ -9,6 +9,24 @@ from cartographer.core.models import Language as ProgLang
 from cartographer.core.models import ParsedEntity
 
 
+def _count_error_nodes(node: Node) -> tuple[int, int]:
+    error_count = 0
+    missing_count = 0
+    if not node.children:
+        if node.type == "ERROR":
+            error_count = 1
+        return error_count, missing_count
+    for child in node.children:
+        if child.type == "ERROR":
+            error_count += 1
+        if child.is_missing:
+            missing_count += 1
+        e, m = _count_error_nodes(child)
+        error_count += e
+        missing_count += m
+    return error_count, missing_count
+
+
 class BaseParser(ABC):
     def __init__(self, language: ProgLang) -> None:
         self._lang = language
@@ -27,7 +45,16 @@ class BaseParser(ABC):
             source = path.read_bytes()
             tree = self._parser.parse(source)
             if tree and tree.root_node.has_error:
-                errors.append(f"Parse errors in {path}")
+                error_nodes, missing = _count_error_nodes(tree.root_node)
+                if tree.root_node.type == "ERROR":
+                    errors.append(f"Parse catastrophic in {path.name}: root is ERROR, {missing} missing")
+                elif error_nodes <= 3 and missing == 0:
+                    pass
+                else:
+                    detail = f"{error_nodes} error nodes"
+                    if missing:
+                        detail += f", {missing} missing"
+                    errors.append(f"Parse errors in {path.name}: {detail}")
             return source, errors
         except Exception as e:
             errors.append(f"Failed to parse {path}: {e}")

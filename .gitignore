@@ -43,6 +43,16 @@ vendor/
 *~
 .DS_Store
 
+# Test repos (not tracked — cloned on demand)
+test/repos/django/
+test/repos/react/
+test/repos/redis/
+test/repos/tokio/
+test/repos/fastapi/
+test/repos/spring-boot/
+test/repos/hugo/
+test/repos/serde/
+
 # Tools
 .ruff_cache/
 .mypy_cache/

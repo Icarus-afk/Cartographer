@@ -33,6 +33,14 @@ EXPECTED = {
     "cats": {"files": 836, "min_nodes": 7000, "min_edges": 7000},
     "jansson": {"files": 51, "min_nodes": 400, "min_edges": 400},
     "kotlinx.coroutines": {"files": 1104, "min_nodes": 2000, "min_edges": 2000},
+    "serde": {"files": 208, "min_nodes": 2000, "min_edges": 2000},
+    "tokio": {"files": 784, "min_nodes": 9000, "min_edges": 10000},
+    "redis": {"files": 866, "min_nodes": 8000, "min_edges": 10000},
+    "fastapi": {"files": 944, "min_nodes": 5000, "min_edges": 7000},
+    "hugo": {"files": 929, "min_nodes": 8000, "min_edges": 8000},
+    "django": {"files": 2356, "min_nodes": 35000, "min_edges": 60000},
+    "react": {"files": 4588, "min_nodes": 20000, "min_edges": 20000},
+    "spring-boot": {"files": 8790, "min_nodes": 50000, "min_edges": 50000},
 }
 
 
@@ -103,8 +111,12 @@ def _run_benchmark(repo_name: str, repo_path: Path, tmpdir: Path) -> dict:
     stats = _index_repo(repo_name, repo_path, db_path)
     print(f"{stats['duration_ms']}ms, {stats['nodes']} nodes, {stats['edges']} edges")
 
-    for err in stats["errors"]:
-        print(f"    Warning: {err}")
+    catastrophic = [e for e in stats["errors"] if "catastrophic" in e]
+    moderate = [e for e in stats["errors"] if "catastrophic" not in e]
+    for err in catastrophic:
+        print(f"    Parse catastrophic: {err}")
+    if moderate:
+        print(f"    Parse warnings: {len(stats['errors'])} files with errors")
 
     expected = EXPECTED.get(repo_name, {})
     issues = _verify(stats, expected)

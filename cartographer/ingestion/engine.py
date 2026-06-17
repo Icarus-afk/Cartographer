@@ -110,7 +110,9 @@ def index_repository(
 
     elapsed = (time.perf_counter() - start) * 1000
 
-    fatal_errors = [e for e in errors if not e.startswith("Parse error")]
+    fatal_errors = [e for e in errors if not (
+        e.startswith("Parse ") or e.startswith("Failed to parse")
+    )]
     return IngestionResult(
         path=str(root),
         manifest=manifest,
