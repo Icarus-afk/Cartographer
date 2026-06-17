@@ -220,7 +220,7 @@ def _ensure_repository(
 ) -> int:
     name = Path(repo_path).name
     manifest_json = _manifest_to_json(manifest) if manifest else None
-    cursor = conn.execute(
+    conn.execute(
         "INSERT INTO repositories (path, name, manifest_json) VALUES (?, ?, ?) "
         "ON CONFLICT(path) DO UPDATE SET manifest_json = COALESCE(?, manifest_json)",
         (repo_path, name, manifest_json, manifest_json),

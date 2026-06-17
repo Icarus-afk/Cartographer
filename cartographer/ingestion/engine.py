@@ -150,7 +150,9 @@ _LANG_EXTENSIONS: dict[Language, tuple[str, ...]] = {
 LANGUAGE_EXTENSIONS: dict[Language, tuple[str, ...]] = _LANG_EXTENSIONS
 
 
-def _parse_single_file(args: tuple[Path, Path, dict[Language, tuple[str, ...]]]) -> tuple[ParsedFile | None, list[str]]:
+def _parse_single_file(
+    args: tuple[Path, Path, dict[Language, tuple[str, ...]]],
+) -> tuple[ParsedFile | None, list[str]]:
     f, root, ext_map = args
     ext = f.suffix.lower()
     lang = Language.UNKNOWN
@@ -188,8 +190,8 @@ def _parse_repository(
     total = len(work)
 
     # ThreadPoolExecutor avoids forking N processes that peg all CPU cores.
-    # GIL serializes CPU-bound parsing, keeping the machine responsive.
-    max_workers = min(os.cpu_count() or 2, 2)
+    # IO-bound file reads benefit from more threads; tree-sitter parsing in C releases the GIL.
+    max_workers = min(os.cpu_count() or 4, 8)
     logger.info("Parsing %d files with %d workers...", total, max_workers)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:

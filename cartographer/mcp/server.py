@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 
 from cartographer.architecture.engine import detect_architecture, get_architecture
 from cartographer.embedding.engine import find_similar, similarity_search
+from cartographer.ingestion.engine import index_repository
 from cartographer.query.engine import execute_query
 from cartographer.retrieval.searcher import search_nodes
 from cartographer.retrieval.summarizer import generate_summary
@@ -336,10 +337,147 @@ def ask(
     query: str,
     repo: str | None = None,
     limit: int = 20,
+    max_tokens: int = 0,
     db: str | None = None,
 ) -> str:
-    result = execute_query(query, _db(db), repo, limit)
+    result = execute_query(query, _db(db), repo, limit, max_tokens)
     return result
+
+
+@mcp().tool(
+    name="graph_data",
+    description="Export graph data as JSON for visualization. Returns nodes, edges, and stats.",
+)
+def graph_data(
+    repo: str | None = None,
+    limit: int = 80,
+    db: str | None = None,
+) -> str:
+    import json
+    conn = _get_conn(db)
+
+    if repo:
+        row = conn.execute(
+            "SELECT id FROM repositories WHERE name = ?", (repo,)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT id FROM repositories ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    if not row:
+        conn.close()
+        return json.dumps({"error": "Repository not found"})
+
+    repo_id = row[0]
+
+    type_counts = dict(conn.execute(
+        """SELECT node_type, COUNT(*) as cnt FROM nodes
+           WHERE repository_id = ? GROUP BY node_type ORDER BY cnt DESC""",
+        (repo_id,),
+    ).fetchall())
+
+    hub_count = max(5, limit // 8)
+    seeds = conn.execute(
+        """SELECT n.id, n.name, n.node_type, n.file_path
+           FROM nodes n
+           WHERE n.repository_id = ?
+           ORDER BY (SELECT COUNT(*) FROM edges WHERE repository_id = ?
+                     AND (source_node_id = n.id OR target_node_id = n.id)) DESC, RANDOM()
+           LIMIT ?""",
+        (repo_id, repo_id, hub_count),
+    ).fetchall()
+
+    seed_ids = [s[0] for s in seeds]
+    all_ids: list[int] = list(seed_ids)
+    if seed_ids:
+        seed_ph = ",".join("?" for _ in seed_ids)
+        rows = conn.execute(
+            f"""SELECT DISTINCT n.id FROM nodes n
+                JOIN edges e ON (e.source_node_id = n.id OR e.target_node_id = n.id)
+                WHERE n.repository_id = ?
+                AND (e.source_node_id IN ({seed_ph}) OR e.target_node_id IN ({seed_ph}))""",
+            (repo_id, *seed_ids, *seed_ids),
+        ).fetchall()
+        for r in rows:
+            if r[0] not in all_ids and len(all_ids) < limit:
+                all_ids.append(r[0])
+
+    if all_ids and len(all_ids) < limit:
+        ph = ",".join("?" for _ in all_ids)
+        remaining = conn.execute(
+            f"""SELECT n.id FROM nodes n
+                WHERE n.repository_id = ? AND n.id NOT IN ({ph})
+                ORDER BY (SELECT COUNT(*) FROM edges WHERE repository_id = ?
+                          AND (source_node_id = n.id OR target_node_id = n.id)) DESC
+                LIMIT ?""",
+            (repo_id, *all_ids, repo_id, limit - len(all_ids)),
+        ).fetchall()
+        for r in remaining:
+            all_ids.append(r[0])
+
+    final_ids = all_ids[:limit]
+    if not final_ids:
+        conn.close()
+        return json.dumps({"nodes": [], "edges": []})
+
+    ph = ",".join("?" for _ in final_ids)
+    nodes_list = conn.execute(
+        f"SELECT id, name, node_type, file_path FROM nodes WHERE id IN ({ph})",
+        (*final_ids,),
+    ).fetchall()
+
+    edges = conn.execute(
+        f"""SELECT source_node_id, target_node_id, edge_type FROM edges
+            WHERE repository_id = ?
+            AND source_node_id IN ({ph})
+            AND target_node_id IN ({ph})""",
+        (repo_id, *final_ids, *final_ids),
+    ).fetchall()
+
+    total_nodes = conn.execute(
+        "SELECT COUNT(*) FROM nodes WHERE repository_id = ?", (repo_id,)
+    ).fetchone()[0]
+    total_edges = conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE repository_id = ?", (repo_id,)
+    ).fetchone()[0]
+
+    conn.close()
+    return json.dumps({
+        "total_nodes": total_nodes,
+        "total_edges": total_edges,
+        "node_types": type_counts,
+        "nodes": [{"id": n[0], "name": n[1], "type": n[2], "file_path": n[3]} for n in nodes_list],
+        "edges": [{"source": e[0], "target": e[1], "type": e[2]} for e in edges],
+    })
+
+
+@mcp().tool(
+    name="index",
+    description="Index a repository. Run this before querying a new repo.",
+)
+def index_repo(
+    path: str = ".",
+    db: str | None = None,
+) -> str:
+    result = index_repository(path, db_path=_db(db))
+    if not result.success:
+        lines = [f"Indexing failed for {path}:"]
+        lines.extend(f"  Error: {e}" for e in result.errors)
+        return "\n".join(lines)
+    manifest = result.manifest
+    lines = [
+        f"Indexed {manifest.total_files} files in {manifest.total_dirs} directories",
+        f"Duration: {result.duration_ms}ms",
+    ]
+    if manifest.languages:
+        active = {
+            k: v for k, v in sorted(manifest.languages.items(), key=lambda x: -x[1])
+            if k.value != "unknown" and v > 0
+        }
+        if active:
+            lines.append("Languages: " + ", ".join(f"{k.value}: {v}" for k, v in active.items()))
+    return "\n".join(lines)
 
 
 def main(db_path: Path | None = None, port: int | None = None) -> None:

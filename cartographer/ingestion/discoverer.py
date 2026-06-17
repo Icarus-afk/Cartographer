@@ -36,7 +36,7 @@ BINARY_EXTENSIONS = {
     ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
     ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
     ".mp3", ".mp4", ".avi", ".mov", ".wmv", ".flv",
-    ".woff2", ".eot", ".wasm",
+    ".wasm",
 }
 
 CARTOGRAPHER_IGNORE = ".cartographerignore"

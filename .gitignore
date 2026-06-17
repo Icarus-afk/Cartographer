@@ -1,3 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environments
 venv/
 .venv/
 .env
+.envrc
+
+# IDE
+.vscode/
+.idea/
+
+# Testing
+.coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+test/repos/
+
+# Project-specific
+notebooks/
+results.json
+class
+opencode .

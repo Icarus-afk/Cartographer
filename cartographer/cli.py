@@ -16,7 +16,12 @@ logging.basicConfig(
 from cartographer.architecture.engine import detect_architecture, get_architecture
 from cartographer.compression.engine import build_context_package, compress
 from cartographer.core.models import EntityKind
-from cartographer.embedding.engine import find_similar, generate_embeddings, invalidate_cache, similarity_search
+from cartographer.embedding.engine import (
+    find_similar,
+    generate_embeddings,
+    invalidate_cache,
+    similarity_search,
+)
 from cartographer.git.engine import (
     author_impact,
     co_change_analysis,
@@ -834,6 +839,7 @@ def git_authors(ctx, repo, limit):
 def graph_data(ctx, repo, limit):
     """Output graph data as JSON for the VS Code extension."""
     import json
+
     from cartographer.storage.connection import get_connection
     conn = get_connection(ctx.obj["db_path"])
 

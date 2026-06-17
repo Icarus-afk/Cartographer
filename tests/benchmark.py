@@ -431,7 +431,7 @@ def _verify(stats: dict, expected: dict) -> list[str]:
             f"  Edge count {stats['edges']} < min {expected['min_edges']}"
         )
     if not stats["success"]:
-        issues.append(f"  Index did not complete successfully")
+        issues.append("  Index did not complete successfully")
     return issues
 
 
@@ -464,7 +464,7 @@ def _measure_source(repo_path: Path, repo_name: str) -> dict:
 
 def _run_benchmark(repo_name: str, repo_path: Path, tmpdir: Path, skip_embed: bool = False) -> dict:
     db_path = tmpdir / f"{repo_name}.db"
-    print(f"  Indexing...", end=" ", flush=True)
+    print("  Indexing...", end=" ", flush=True)
     stats = _index_repo(repo_name, repo_path, db_path)
     print(f"{stats['duration_ms']}ms, {stats['nodes']} nodes, {stats['edges']} edges")
 
@@ -486,14 +486,14 @@ def _run_benchmark(repo_name: str, repo_path: Path, tmpdir: Path, skip_embed: bo
         stats["source"] = source
         print(f"  Source: {source['chars']:,} chars, ~{source['tokens_est']:,} tokens")
 
-        print(f"  Architecture detection...", end=" ", flush=True)
+        print("  Architecture detection...", end=" ", flush=True)
         arch = _detect_architecture(repo_name, db_path)
         layer_names = set(arch.get("layers", {}).keys())
         pattern_names = {p["name"] for p in arch.get("patterns", [])}
         stats["architecture"] = {"layers": len(layer_names), "patterns": len(pattern_names)}
         print(f"{len(layer_names)} layers, {len(pattern_names)} patterns")
 
-        print(f"  Search ('class' query)...", end=" ", flush=True)
+        print("  Search ('class' query)...", end=" ", flush=True)
         results = _search(repo_name, db_path, "class")
         stats["search_results"] = len(results)
         print(f"{len(results)} results")

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "cartographer": {
+      "type": "local",
+      "command": ["cartographer-mcp"],
+      "enabled": true
+    }
+  },
+  "agent": {
+    "default": {
+      "rules": [
+        "When analyzing the codebase, use cartographer tools (search, impact, neighbors, path, summarize, architecture, similar, ask) to understand the code before making changes.",
+        "After making changes, run `make lint` to check lint and `make test` to run tests.",
+        "Follow existing code patterns — mimic style, use existing utilities, don't add comments."
+      ]
+    }
+  }
+}
+

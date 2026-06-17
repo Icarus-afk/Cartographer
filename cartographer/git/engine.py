@@ -348,9 +348,9 @@ def why_introduced(
 
     conn = get_connection(db_path)
     node = _resolve_target(conn, target, repo_name)
-    conn.close()
 
     if not node or not node["file_path"]:
+        conn.close()
         return None
 
     # Query the oldest commit for this file (the one that introduced it)
@@ -359,7 +359,6 @@ def why_introduced(
         conn.close()
         return None
 
-    conn = get_connection(db_path)
     row = conn.execute(
         """SELECT c.hash, c.author, c.message, c.committed_at, cf.change_type
            FROM commits c

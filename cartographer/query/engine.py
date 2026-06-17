@@ -9,7 +9,10 @@ logger = logging.getLogger(__name__)
 
 from cartographer.compression.engine import estimate_tokens
 from cartographer.git.engine import (
-    co_change_analysis, get_node_history, list_authors, why_introduced,
+    co_change_analysis,
+    get_node_history,
+    list_authors,
+    why_introduced,
 )
 from cartographer.retrieval.searcher import search_nodes
 from cartographer.retrieval.summarizer import generate_summary
