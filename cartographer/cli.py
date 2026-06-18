@@ -835,8 +835,12 @@ def git_authors(ctx, repo, limit):
 @main.command(name="graph-data")
 @click.option("--repo", "-r", help="Repository name")
 @click.option("--limit", "-l", default=80, help="Max nodes to sample")
+@click.option("--offset", "-o", default=0, help="Skip N hub groups for pagination")
+@click.option("--dir", "-d", "dir_filter", default=None, help="Filter by directory prefix")
+@click.option("--expand-node-id", type=int, default=None,
+              help="Expand neighbors of a specific node ID")
 @click.pass_context
-def graph_data(ctx, repo, limit):
+def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
     """Output graph data as JSON for the VS Code extension."""
     import json
 
@@ -854,71 +858,90 @@ def graph_data(ctx, repo, limit):
 
     repo_id = row[0]
 
-    type_counts = conn.execute(
-        "SELECT node_type, COUNT(*) as cnt FROM nodes WHERE repository_id = ? GROUP BY node_type ORDER BY cnt DESC",
+    type_counts = dict(conn.execute(
+        "SELECT node_type, COUNT(*) as cnt FROM nodes"
+        " WHERE repository_id = ? GROUP BY node_type ORDER BY cnt DESC",
         (repo_id,),
-    ).fetchall()
+    ).fetchall())
 
-    # Extract a connected subgraph: pick high-degree hubs and include all their neighbors
-    hub_count = max(5, limit // 8)
-    seeds = conn.execute(
-        """SELECT n.id, n.name, n.node_type, n.file_path
-           FROM nodes n
-           WHERE n.repository_id = ?
-           ORDER BY (SELECT COUNT(*) FROM edges WHERE repository_id = ?
-                     AND (source_node_id = n.id OR target_node_id = n.id)) DESC, RANDOM()
-           LIMIT ?""",
-        (repo_id, repo_id, hub_count),
-    ).fetchall()
+    all_ids: list[int] = []
 
-    # Assign a unique param name per seed for the OR conditions
-    seed_ids = [s[0] for s in seeds]
-    all_ids: list[int] = list(seed_ids)
-    if seed_ids:
-        seed_ph = ",".join("?" for _ in seed_ids)
-        # Include all neighbors of seed hubs (no cap per seed)
+    if expand_node_id is not None:
+        all_ids = [expand_node_id]
         rows = conn.execute(
-            f"""SELECT DISTINCT n.id FROM nodes n
-                JOIN edges e ON (e.source_node_id = n.id OR e.target_node_id = n.id)
-                WHERE n.repository_id = ?
-                AND (e.source_node_id IN ({seed_ph}) OR e.target_node_id IN ({seed_ph}))""",
-            (repo_id, *seed_ids, *seed_ids),
+            """SELECT DISTINCT
+                   CASE WHEN e.source_node_id = ? THEN e.target_node_id
+                        ELSE e.source_node_id END
+               FROM edges e
+               WHERE e.repository_id = ?
+               AND (e.source_node_id = ? OR e.target_node_id = ?)
+               LIMIT ?""",
+            (expand_node_id, repo_id, expand_node_id, expand_node_id, limit - 1),
         ).fetchall()
-        neighbor_ids = [r[0] for r in rows]
-        for nid in neighbor_ids:
-            if len(all_ids) >= limit:
-                break
-            if nid not in all_ids:
-                all_ids.append(nid)
+        for r in rows:
+            if r[0] not in all_ids and len(all_ids) < limit:
+                all_ids.append(r[0])
+    else:
+        base_where = "WHERE n.repository_id = ?"
+        base_params: list = [repo_id]
+        if dir_filter:
+            base_where += " AND n.file_path LIKE ?"
+            base_params.append(dir_filter + "%")
 
-    # If we still have room, add the next highest-degree nodes not yet included
-    if all_ids and len(all_ids) < limit:
-        ph = ",".join("?" for _ in all_ids)
-        remaining = conn.execute(
+        hub_count = max(5, limit // 8)
+        seeds = conn.execute(
             f"""SELECT n.id FROM nodes n
-                WHERE n.repository_id = ? AND n.id NOT IN ({ph})
-                ORDER BY (SELECT COUNT(*) FROM edges WHERE repository_id = ?
-                          AND (source_node_id = n.id OR target_node_id = n.id)) DESC
-                LIMIT ?""",
-            (repo_id, *all_ids, repo_id, limit - len(all_ids)),
+                {base_where}
+                ORDER BY (SELECT COUNT(*) FROM edges e
+                          WHERE e.repository_id = ?
+                          AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC, RANDOM()
+                LIMIT ? OFFSET ?""",
+            (*base_params, repo_id, hub_count, offset),
         ).fetchall()
-        for r in remaining:
-            all_ids.append(r[0])
+
+        all_ids = [s[0] for s in seeds]
+        if seeds:
+            seed_ph = ",".join("?" for _ in seeds)
+            rows = conn.execute(
+                f"""SELECT DISTINCT n.id FROM nodes n
+                    JOIN edges e ON (e.source_node_id = n.id OR e.target_node_id = n.id)
+                    WHERE n.repository_id = ?
+                    AND (e.source_node_id IN ({seed_ph}) OR e.target_node_id IN ({seed_ph}))
+                    AND n.id NOT IN ({seed_ph})
+                    LIMIT ?""",
+                (repo_id, *[s[0] for s in seeds], *[s[0] for s in seeds], limit - len(all_ids)),
+            ).fetchall()
+            for r in rows:
+                if r[0] not in all_ids and len(all_ids) < limit:
+                    all_ids.append(r[0])
+
+        if all_ids and len(all_ids) < limit:
+            ph = ",".join("?" for _ in all_ids)
+            remaining = conn.execute(
+                f"""SELECT n.id FROM nodes n
+                    {base_where} AND n.id NOT IN ({ph})
+                    ORDER BY (SELECT COUNT(*) FROM edges e
+                              WHERE e.repository_id = ?
+                              AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC
+                    LIMIT ?""",
+                (*base_params, *all_ids, repo_id, limit - len(all_ids)),
+            ).fetchall()
+            for r in remaining:
+                all_ids.append(r[0])
 
     final_ids = all_ids[:limit]
-    nodes_list = []
-    edges = []
     if not final_ids:
-        return {"nodes": [], "edges": []}
+        conn.close()
+        empty = {"nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0, "node_types": type_counts}
+        click.echo(json.dumps(empty))
+        return
 
     ph = ",".join("?" for _ in final_ids)
     nodes_list = conn.execute(
-        f"SELECT id, name, node_type, file_path FROM nodes"
-        f" WHERE id IN ({ph})",
+        f"SELECT id, name, node_type, file_path FROM nodes WHERE id IN ({ph})",
         (*final_ids,),
     ).fetchall()
 
-    ph = ",".join("?" for _ in final_ids)
     edges = conn.execute(
         f"""SELECT source_node_id, target_node_id, edge_type FROM edges
             WHERE repository_id = ?
@@ -934,13 +957,25 @@ def graph_data(ctx, repo, limit):
         "SELECT COUNT(*) FROM edges WHERE repository_id = ?", (repo_id,)
     ).fetchone()[0]
 
+    dir_rows = conn.execute(
+        "SELECT file_path FROM nodes WHERE repository_id = ?"
+        " AND node_type != 'directory' AND file_path IS NOT NULL",
+        (repo_id,),
+    ).fetchall()
+    dir_counts: dict[str, int] = {}
+    for (fp,) in dir_rows:
+        d = fp.rsplit("/", 1)[0] if "/" in fp else "/"
+        dir_counts[d] = dir_counts.get(d, 0) + 1
+
     conn.close()
     click.echo(json.dumps({
         "total_nodes": total_nodes,
         "total_edges": total_edges,
-        "node_types": {r[0]: r[1] for r in type_counts},
+        "node_types": type_counts,
         "nodes": [{"id": n[0], "name": n[1], "type": n[2], "file_path": n[3]} for n in nodes_list],
         "edges": [{"source": e[0], "target": e[1], "type": e[2]} for e in edges],
+        "directories": [{"path": p, "count": c}
+                for p, c in sorted(dir_counts.items(), key=lambda x: -x[1])],
     }))
 
 

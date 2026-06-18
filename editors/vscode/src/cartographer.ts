@@ -41,7 +41,7 @@ export interface PathResult {
 
 export interface GraphNode { id: number; name: string; type: string; file_path?: string }
 export interface GraphEdge { source: number; target: number; type: string }
-export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; node_types: Record<string, number>; total_nodes?: number; total_edges?: number }
+export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; node_types: Record<string, number>; total_nodes?: number; total_edges?: number; directories?: { path: string; count: number }[] }
 
 export interface RepoInfo { name: string; path: string; nodes: number; edges: number }
 
@@ -359,19 +359,28 @@ export class CartographerClient {
     return this.search("", nodeType, limit, repoName);
   }
 
-  async getGraphData(limit = 400, repoOverride?: string): Promise<GraphData> {
+  async getGraphData(
+    limit = 400,
+    repoOverride?: string,
+    offset = 0,
+    dir?: string,
+    expandNodeId?: number,
+  ): Promise<GraphData> {
     const repo = repoOverride || this.repoName();
     try {
       const db = this.dbPath();
-      const out = await this.mcpOrCli("graph_data", { repo, limit },
-        () => this.exec(["graph-data", "-l", String(limit), "--db", db, "--repo", repo])
-      );
+      const mcpArgs: Record<string, unknown> = { repo, limit };
+      const cliArgs = ["graph-data", "-l", String(limit), "--db", db, "--repo", repo];
+      if (offset > 0) { mcpArgs.offset = offset; cliArgs.push("--offset", String(offset)); }
+      if (dir) { mcpArgs.dir = dir; cliArgs.push("--dir", dir); }
+      if (expandNodeId !== undefined) { mcpArgs.expand_node_id = expandNodeId; cliArgs.push("--expand-node-id", String(expandNodeId)); }
+      const out = await this.mcpOrCli("graph_data", mcpArgs, () => this.exec(cliArgs));
       const d = JSON.parse(out);
-      if (d.error) { this.output.appendLine(`getGraphData error: ${d.error}`); return { nodes: [], edges: [], node_types: {} }; }
+      if (d.error) { this.output.appendLine(`getGraphData error: ${d.error}`); return { nodes: [], edges: [], node_types: {}, directories: [] }; }
       return d;
     } catch (e) {
       this.output.appendLine(`getGraphData failed: ${e}`);
-      return { nodes: [], edges: [], node_types: {} };
+      return { nodes: [], edges: [], node_types: {}, directories: [] };
     }
   }
 

@@ -346,14 +346,17 @@ def ask(
 
 @mcp().tool(
     name="graph_data",
-    description="Export graph data as JSON for visualization. Returns nodes, edges, and stats.",
+    description="Export graph data as JSON. Supports pagination, dir filter, and node expansion.",
 )
 def graph_data(
     repo: str | None = None,
     limit: int = 80,
+    offset: int = 0,
+    dir: str | None = None,
+    expand_node_id: int | None = None,
     db: str | None = None,
 ) -> str:
-    import json
+    import json as _json
     conn = _get_conn(db)
 
     if repo:
@@ -367,7 +370,7 @@ def graph_data(
 
     if not row:
         conn.close()
-        return json.dumps({"error": "Repository not found"})
+        return _json.dumps({"error": "Repository not found"})
 
     repo_id = row[0]
 
@@ -377,54 +380,26 @@ def graph_data(
         (repo_id,),
     ).fetchall())
 
-    hub_count = max(5, limit // 8)
-    seeds = conn.execute(
-        """SELECT n.id, n.name, n.node_type, n.file_path
-           FROM nodes n
-           WHERE n.repository_id = ?
-           ORDER BY (SELECT COUNT(*) FROM edges WHERE repository_id = ?
-                     AND (source_node_id = n.id OR target_node_id = n.id)) DESC, RANDOM()
-           LIMIT ?""",
-        (repo_id, repo_id, hub_count),
-    ).fetchall()
+    all_ids: list[int] = []
 
-    seed_ids = [s[0] for s in seeds]
-    all_ids: list[int] = list(seed_ids)
-    if seed_ids:
-        seed_ph = ",".join("?" for _ in seed_ids)
-        rows = conn.execute(
-            f"""SELECT DISTINCT n.id FROM nodes n
-                JOIN edges e ON (e.source_node_id = n.id OR e.target_node_id = n.id)
-                WHERE n.repository_id = ?
-                AND (e.source_node_id IN ({seed_ph}) OR e.target_node_id IN ({seed_ph}))""",
-            (repo_id, *seed_ids, *seed_ids),
-        ).fetchall()
-        for r in rows:
-            if r[0] not in all_ids and len(all_ids) < limit:
-                all_ids.append(r[0])
+    # Mode 1: expand node neighbors
+    if expand_node_id is not None:
+        all_ids = _graph_expand_node(conn, repo_id, expand_node_id, limit)
 
-    if all_ids and len(all_ids) < limit:
-        ph = ",".join("?" for _ in all_ids)
-        remaining = conn.execute(
-            f"""SELECT n.id FROM nodes n
-                WHERE n.repository_id = ? AND n.id NOT IN ({ph})
-                ORDER BY (SELECT COUNT(*) FROM edges WHERE repository_id = ?
-                          AND (source_node_id = n.id OR target_node_id = n.id)) DESC
-                LIMIT ?""",
-            (repo_id, *all_ids, repo_id, limit - len(all_ids)),
-        ).fetchall()
-        for r in remaining:
-            all_ids.append(r[0])
+    # Mode 2: standard hub-based graph with pagination and dir filter
+    else:
+        all_ids = _graph_hub_nodes(conn, repo_id, limit, offset, dir)
 
-    final_ids = all_ids[:limit]
-    if not final_ids:
+    if not all_ids:
         conn.close()
-        return json.dumps({"nodes": [], "edges": []})
+        empty = {"nodes": [], "edges": [],
+                 "total_nodes": 0, "total_edges": 0, "node_types": type_counts}
+    return _json.dumps(empty)
 
-    ph = ",".join("?" for _ in final_ids)
+    ph = ",".join("?" for _ in all_ids)
     nodes_list = conn.execute(
         f"SELECT id, name, node_type, file_path FROM nodes WHERE id IN ({ph})",
-        (*final_ids,),
+        (*all_ids,),
     ).fetchall()
 
     edges = conn.execute(
@@ -432,7 +407,7 @@ def graph_data(
             WHERE repository_id = ?
             AND source_node_id IN ({ph})
             AND target_node_id IN ({ph})""",
-        (repo_id, *final_ids, *final_ids),
+        (repo_id, *all_ids, *all_ids),
     ).fetchall()
 
     total_nodes = conn.execute(
@@ -442,14 +417,106 @@ def graph_data(
         "SELECT COUNT(*) FROM edges WHERE repository_id = ?", (repo_id,)
     ).fetchone()[0]
 
+    # Collect directory stats (compute in Python for portability)
+    dir_rows = conn.execute(
+        "SELECT file_path FROM nodes WHERE repository_id = ?"
+        " AND node_type != 'directory' AND file_path IS NOT NULL",
+        (repo_id,),
+    ).fetchall()
+    dir_counts: dict[str, int] = {}
+    for (fp,) in dir_rows:
+        d = fp.rsplit("/", 1)[0] if "/" in fp else "/"
+        dir_counts[d] = dir_counts.get(d, 0) + 1
+    dirs = sorted(dir_counts.items(), key=lambda x: -x[1])
+
     conn.close()
-    return json.dumps({
+    return _json.dumps({
         "total_nodes": total_nodes,
         "total_edges": total_edges,
         "node_types": type_counts,
         "nodes": [{"id": n[0], "name": n[1], "type": n[2], "file_path": n[3]} for n in nodes_list],
         "edges": [{"source": e[0], "target": e[1], "type": e[2]} for e in edges],
+        "directories": [{"path": p, "count": c} for p, c in dirs],
     })
+
+
+def _graph_expand_node(
+    conn: sqlite3.Connection, repo_id: int, node_id: int, limit: int,
+) -> list[int]:
+    """Fetch a specific node and its immediate neighbors."""
+    ids: list[int] = [node_id]
+    rows = conn.execute(
+        """SELECT DISTINCT
+               CASE WHEN e.source_node_id = ? THEN e.target_node_id
+                    ELSE e.source_node_id END as neighbor_id
+           FROM edges e
+           WHERE e.repository_id = ?
+           AND (e.source_node_id = ? OR e.target_node_id = ?)
+           LIMIT ?""",
+        (node_id, repo_id, node_id, node_id, limit - 1),
+    ).fetchall()
+    for r in rows:
+        if r[0] not in ids and len(ids) < limit:
+            ids.append(r[0])
+    return ids
+
+
+def _graph_hub_nodes(
+    conn: sqlite3.Connection, repo_id: int, limit: int, offset: int,
+    dir_filter: str | None,
+) -> list[int]:
+    """Select high-degree hub nodes + neighbors, with pagination + dir filter."""
+    base_where = "WHERE n.repository_id = ?"
+    base_params: list = [repo_id]
+
+    if dir_filter:
+        base_where += " AND n.file_path LIKE ?"
+        base_params.append(dir_filter + "%")
+
+    # Pick hubs (skipping offset), then add their neighbors
+    hub_count = max(5, limit // 8)
+    seeds = conn.execute(
+        f"""SELECT n.id FROM nodes n
+            {base_where}
+            ORDER BY (SELECT COUNT(*) FROM edges e
+                      WHERE e.repository_id = ?
+                      AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC, RANDOM()
+            LIMIT ? OFFSET ?""",
+        (*base_params, repo_id, hub_count, offset),
+    ).fetchall()
+
+    all_ids: list[int] = [s[0] for s in seeds]
+    if seeds:
+        seed_ph = ",".join("?" for _ in seeds)
+        rows = conn.execute(
+            f"""SELECT DISTINCT n.id FROM nodes n
+                JOIN edges e ON (e.source_node_id = n.id OR e.target_node_id = n.id)
+                WHERE n.repository_id = ?
+                AND (e.source_node_id IN ({seed_ph}) OR e.target_node_id IN ({seed_ph}))
+                AND n.id NOT IN ({seed_ph})
+                LIMIT ?""",
+            (repo_id, *[s[0] for s in seeds], *[s[0] for s in seeds], limit - len(all_ids)),
+        ).fetchall()
+        for r in rows:
+            if r[0] not in all_ids and len(all_ids) < limit:
+                all_ids.append(r[0])
+
+    # If still room, add next highest-degree nodes
+    if all_ids and len(all_ids) < limit:
+        ph = ",".join("?" for _ in all_ids)
+        remaining = conn.execute(
+            f"""SELECT n.id FROM nodes n
+                {base_where} AND n.id NOT IN ({ph})
+                ORDER BY (SELECT COUNT(*) FROM edges e
+                          WHERE e.repository_id = ?
+                          AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC
+                LIMIT ?""",
+            (*base_params, *all_ids, repo_id, limit - len(all_ids)),
+        ).fetchall()
+        for r in remaining:
+            all_ids.append(r[0])
+
+    return all_ids[:limit]
 
 
 @mcp().tool(
