@@ -929,7 +929,7 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
                     AND (e.source_node_id IN ({seed_ph}) OR e.target_node_id IN ({seed_ph}))
                     AND n.id NOT IN ({seed_ph})
                     LIMIT ?""",
-                (repo_id, *[s[0] for s in seeds], *[s[0] for s in seeds], limit - len(all_ids)),
+                (repo_id, *[s[0] for s in seeds], *[s[0] for s in seeds], *[s[0] for s in seeds], limit - len(all_ids)),
             ).fetchall()
             for r in rows:
                 if r[0] not in all_ids and len(all_ids) < limit:
