@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Repository Intelligence Operating System"
 readme = "README.md"
 license = { text = "MIT" }
-authors = [{ name = "Cartographer Contributors" }]
+authors = [{ name = "Ehasan Ahmed", email = "ehasan.ahmed01@gmail.com" }]
 requires-python = ">=3.10"
 
 dependencies = [
@@ -53,6 +53,12 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Topic :: Software Development :: Build Tools",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Icarus-afk/cartographer"
+Repository = "https://github.com/Icarus-afk/cartographer"
+BugTracker = "https://github.com/Icarus-afk/cartographer/issues"
+Documentation = "https://github.com/Icarus-afk/cartographer/tree/main/docs"
 
 [project.optional-dependencies]
 watch = ["watchdog>=4.0"]

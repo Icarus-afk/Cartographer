@@ -154,7 +154,7 @@ cartographer delete-file /path/to/repo/src/removed.py
 cartographer mcp start
 ```
 
-Starts a Model Context Protocol server that exposes all Cartographer tools to AI assistants like Claude Desktop, Cursor, and OpenCode. The MCP server supports 15+ tools including `search`, `impact`, `neighbors`, `path`, `graph_data` (with pagination and directory filtering), `context` (compressed context packages), `update_index` (incremental re-index), `delete_file`, and `db_info`.
+Starts a Model Context Protocol server that exposes all Cartographer tools to AI assistants like Claude Desktop, Cursor, and OpenCode. The MCP server supports 14 tools including `search`, `impact`, `neighbors`, `path`, `graph_data` (with pagination and directory filtering), `context` (compressed context packages), `update_index` (incremental re-index), `delete_file`, and `db_info`.
 
 ---
 
@@ -340,6 +340,12 @@ Tree-sitter language grammars are downloaded on demand when you index a file in 
 | [Whitepaper](docs/whitepaper.md) | Full technical whitepaper |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
 
+### Community
+
+- [Contributing Guidelines](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security Policy](SECURITY.md)
+
 ---
 
 ## Development
@@ -352,4 +358,4 @@ pytest
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE) for details.

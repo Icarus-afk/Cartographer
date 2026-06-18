@@ -28,4 +28,6 @@ notebooks/
 results.json
 class
 opencode .
-/.cartographer/data.db
+.cartographer/
+
+docs/internal/
