@@ -84,7 +84,27 @@ def _walk_children(entity):
 @click.pass_context
 def main(ctx, db):
     ctx.ensure_object(dict)
-    ctx.obj["db_path"] = Path(db) if db else Path.home() / ".cartographer" / "index.db"
+    if db:
+        ctx.obj["db_path"] = Path(db)
+    elif env_db := os.environ.get("CARTOGRAPHER_DB"):
+        ctx.obj["db_path"] = Path(env_db)
+    else:
+        # Check for per-project config in current directory
+        proj_cfg = Path.cwd() / ".cartographer" / "config.json"
+        if proj_cfg.exists():
+            try:
+                import json as _json
+                cfg = _json.loads(proj_cfg.read_text())
+                cfg_db = cfg.get("dbPath", "")
+                if cfg_db:
+                    p = Path(cfg_db)
+                    ctx.obj["db_path"] = p if p.is_absolute() else Path.cwd() / cfg_db
+                else:
+                    ctx.obj["db_path"] = Path.cwd() / ".cartographer" / "data.db"
+                return
+            except Exception:
+                pass
+        ctx.obj["db_path"] = Path.home() / ".cartographer" / "index.db"
 
 
 @main.command()

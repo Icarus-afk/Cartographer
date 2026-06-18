@@ -1,0 +1,8 @@
+{
+  "dbPath": "",
+  "autoReindex": true,
+  "watch": false,
+  "mcpPort": 0,
+  "graphLimit": 400,
+  "maxResults": 40
+}
