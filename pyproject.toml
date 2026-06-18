@@ -42,8 +42,6 @@ dependencies = [
     "tree-sitter-groovy>=0.1.0",
 ]
 
-[project.optional-dependencies]
-watch = ["watchdog>=4.0"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -55,6 +53,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Topic :: Software Development :: Build Tools",
 ]
+
+[project.optional-dependencies]
+watch = ["watchdog>=4.0"]
 
 [project.scripts]
 cartographer = "cartographer.cli:main"
