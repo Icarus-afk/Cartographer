@@ -275,6 +275,21 @@ If using the MCP server (`cartographer mcp`):
 1. Make sure the server starts without errors
 2. Check that your AI assistant is configured to connect to a local MCP server
 3. Verify the `cartographer-mcp` command is on your PATH
+4. If a stale PID file exists, remove it: `rm ~/.cartographer/mcp.pid`
+5. `notifications/initialized` must be sent without a JSON-RPC `id` field (the VS Code extension does this correctly since v0.1.0)
+
+### Graph shows 0 nodes in VS Code extension
+
+If the interactive graph visualization shows "Showing 0 of N nodes":
+
+1. **Entity type button clicked**: When opening the graph via the entity tree's inline "Graph" button, the entity type is extracted from the tree item. Make sure the entity type is recognized (directory, file, class, function, method, constant, interface, etc.)
+2. **MCP fallback**: If the MCP connection fails, the extension falls back to CLI. Check the "Cartographer" output channel (`Ctrl+Shift+U`, select "Cartographer") for "MCP start failed" messages
+3. **Database path**: Verify the database contains indexed data with `Cartographer: Database Info` command
+4. **Reload window**: After installing a new version, use `Developer: Reload Window` to pick up changes
+
+### Extension: "[object Object]s Graph" title
+
+If the graph panel title shows `[object Object]s Graph` instead of "Function Graph" etc., the entity type was not properly extracted from the tree view item. This was fixed in v0.1.0 — update the extension and reload VS Code.
 
 ### Output too long for LLM context
 

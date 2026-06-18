@@ -120,6 +120,11 @@ export class McpClient implements vscode.Disposable {
     });
   }
 
+  private sendNotification(method: string): void {
+    const raw = JSON.stringify({ jsonrpc: "2.0", method }) + "\n";
+    this.proc?.stdin?.write(raw);
+  }
+
   private async initialize(): Promise<void> {
     const supportedVersions = ["2025-03-26", "2024-11-05"];
     const resp = await this.send("initialize", {
@@ -129,7 +134,7 @@ export class McpClient implements vscode.Disposable {
     });
     const parsed = JSON.parse(resp);
     const serverVersion = parsed.protocolVersion || supportedVersions[0];
-    await this.send("notifications/initialized");
+    this.sendNotification("notifications/initialized");
   }
 
   async callTool(name: string, args?: Record<string, unknown>): Promise<string> {

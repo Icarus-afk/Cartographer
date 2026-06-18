@@ -86,7 +86,10 @@ export function activate(_ctx: vscode.ExtensionContext): void {
     ["cartographer.embed", cmdEmbed],
     ["cartographer.gitIndex", cmdGitIndex],
     ["cartographer.graph", cmdGraph],
-    ["cartographer.graphEntityType", (t: string) => cmdGraph(t, entityTree.currentRepo())],
+    ["cartographer.graphEntityType", (item: { entityType?: string; label?: string } | string) => {
+      const type = typeof item === "string" ? item : item?.entityType || item?.label || "";
+      cmdGraph(type, entityTree.currentRepo());
+    }],
     ["cartographer.openDb", cmdOpenDb],
     ["cartographer.refresh", cmdRefresh],
     ["cartographer.searchType", cmdSearchByType],
@@ -567,7 +570,9 @@ function cmdGraph(entityType?: string, repoName?: string): void {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders || folders.length === 0) return void showError("No workspace folder open");
   function showGraph(client: CartographerClient) {
-    createGraphWebview(client, ctx.extensionUri, entityType, repoName);
+    createGraphWebview(client, ctx.extensionUri,
+      typeof entityType === "string" ? entityType : undefined,
+      typeof repoName === "string" ? repoName : undefined);
   }
   if (folders.length === 1) {
     showGraph(clients.get(folders[0].uri.fsPath));

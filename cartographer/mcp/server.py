@@ -394,7 +394,7 @@ def graph_data(
         conn.close()
         empty = {"nodes": [], "edges": [],
                  "total_nodes": 0, "total_edges": 0, "node_types": type_counts}
-    return _json.dumps(empty)
+        return _json.dumps(empty)
 
     ph = ",".join("?" for _ in all_ids)
     nodes_list = conn.execute(
