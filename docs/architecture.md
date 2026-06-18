@@ -48,7 +48,7 @@ Repository (files on disk)
      │Detect  │
      │Dispatch│ ┌──────────────┐
      └────────┘ │ MCP Server   │  Model Context Protocol server
-                │              │  exposes 8 tools + 3 resources
+                 │              │  exposes 14 tools + 3 resources
                 └──────────────┘
 
 ┌──────────────┐

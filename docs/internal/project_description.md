@@ -10,7 +10,7 @@ Indexing uses a bounded `ThreadPoolExecutor` (max 2 workers) to avoid CPU peggin
 
 Cartographer has been benchmarked against **22 real-world repositories** totalling over 25,000 files: django, react, spring-boot, hugo, junit5, fastapi, redis, tokio, kotlinx.coroutines, json, cats, serde, Humanizer, and more. It indexes at an average of 459 files/s on a Ryzen 7 7840HS with 16GB DDR5 RAM. The knowledge graph contains 219,882 nodes and 264,840 edges. Embedding generation takes about 666 seconds for all 22 repos (jina-embeddings-v2-small-en, CPU). Semantic search queries achieve 220/220 (100%) top-5 recall across the full benchmark suite. When used with AI coding assistants via MCP, it reduces token consumption by replacing raw file dumps with structured graph queries — roughly 150 tokens per query vs 512 tokens for manual context selection, and versus hundreds of thousands for a full source dump.
 
-The system is written in Python, licensed under MIT, and is currently in alpha development. It powers a 26-command CLI, a VS Code extension with live D3 graph visualization, and a full Model Context Protocol (MCP) server exposing 8 tools and 3 resources for AI coding assistants. MCP integration has been tested with OpenCode, Claude Desktop, and Cursor.
+The system is written in Python, licensed under MIT, and is currently in alpha development. It powers a 30-command CLI, a VS Code extension with live D3 graph visualization, and a full Model Context Protocol (MCP) server exposing 14 tools and 3 resources for AI coding assistants. MCP integration has been tested with OpenCode, Claude Desktop, and Cursor.
 
 ---
 

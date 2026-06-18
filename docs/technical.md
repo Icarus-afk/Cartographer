@@ -136,7 +136,7 @@ Repository
 | Compression Engine | `cartographer/compression/` | Reduce LLM token count via 4 graph strategies |
 | Query Planner | `cartographer/query/` | Classify intent (9 types), plan retrieval strategy |
 | Git Intelligence | `cartographer/git/` | Parse commits, authors, co-change analysis |
-| MCP Server | `cartographer/mcp/` | Expose 8 tools + 3 resources via Model Context Protocol |
+| MCP Server | `cartographer/mcp/` | Expose 14 tools + 3 resources via Model Context Protocol |
 | CLI | `cartographer/cli.py` | Click-based command-line interface (16 commands) |
 
 ---
@@ -843,7 +843,7 @@ Uses **Model Context Protocol** (MCP SDK 1.27.2) with FastMCP on stdio transport
 | `cartographer://repo/{name}` | Repository details + counts | Nodes, edges, embeddings |
 | `cartographer://node/{node_id}` | Single node with metadata | Name, type, file, metadata |
 
-### 8 Tools
+### 14 Tools
 
 | Tool | Function | Parameters |
 |---|---|---|
@@ -854,7 +854,13 @@ Uses **Model Context Protocol** (MCP SDK 1.27.2) with FastMCP on stdio transport
 | `summarize` | Repo stats and breakdown | `repo?`, `db?` |
 | `architecture` | Detect/retrieve architecture | `repo?`, `detect?`, `db?` |
 | `similar` | Semantic similarity search | `target`, `repo?`, `limit?`, `db?` |
-| `ask` | Natural language question | `query`, `repo?`, `limit?`, `db?` |
+| `ask` | Natural language question answering | `query`, `repo?`, `limit?`, `max_tokens?`, `db?` |
+| `graph_data` | Export graph as JSON with pagination | `repo?`, `limit?`, `offset?`, `dir?`, `expand_node_id?`, `db?` |
+| `index` | Index a repository | `path`, `db?` |
+| `context` | Generate structured context package | `repo?`, `top_n?`, `max_tokens?`, `db?` |
+| `update_index` | Incrementally re-index a single file | `file_path`, `db?` |
+| `delete_file` | Remove a deleted file from the graph | `file_path`, `db?` |
+| `db_info` | Show database statistics | `db?` |
 
 All tools return plain text formatted for LLM consumption.
 
@@ -878,10 +884,10 @@ Configure Claude Desktop, Cursor, or OpenCode to connect:
 
 **Location:** `cartographer/cli.py`
 
-### Commands (26 total)
+### Commands (30 total)
 
 | Command | Description | Options |
-|---|---|---|---|
+|---|---|---|
 | `cartographer init [PATH]` | Initialize and index a repo | `--force` |
 | `cartographer index [PATH]` | Index a repository | (none) |
 | `cartographer ask QUERY` | Search the graph | `--type`, `--repo`, `--limit`, `--semantic`, `--max-tokens` |
@@ -894,7 +900,10 @@ Configure Claude Desktop, Cursor, or OpenCode to connect:
 | `cartographer embed` | Generate embeddings | `--repo` |
 | `cartographer similar TARGET` | Semantic similarity | `--repo`, `--limit` |
 | `cartographer architecture` | Architecture | `--detect`, `--repo`, `--verbose` |
-| `cartographer graph-data` | Export graph as JSON (for VS Code) | `--repo`, `--limit` |
+| `cartographer graph-data` | Export graph as JSON (for VS Code) | `--repo`, `--limit`, `--offset`, `--dir`, `--expand-node-id` |
+| `cartographer watch PATH` | Watch repo for changes (auto re-index) | (none) |
+| `cartographer update-index FILE` | Incrementally re-index a single file | (none) |
+| `cartographer delete-file FILE` | Remove a deleted file from the graph | (none) |
 | `cartographer version` | Show version | (none) |
 | `cartographer mcp start` | Start MCP server | `--db`, `--port`, `--verbose`, `--log-file` |
 | `cartographer mcp stop` | Stop running MCP server | (none) |

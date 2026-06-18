@@ -586,15 +586,23 @@ Stops the server by sending SIGTERM to the process whose PID is stored in `~/.ca
 
 ### What it exposes
 
-**8 Tools** (callable by the AI assistant):
-- `search` — search knowledge graph nodes
-- `impact` — find what depends on a target
-- `neighbors` — show graph neighbors (BFS)
-- `path` — shortest path between nodes
-- `summarize` — repository statistics
-- `architecture` — detect/retrieve architecture
-- `similar` — semantic similarity search
-- `ask` — natural language question answering
+**14 Tools** (callable by the AI assistant):
+- `search` — search knowledge graph nodes (`query`, `node_type?`, `limit?`)
+- `impact` — find what depends on a target (`target`)
+- `neighbors` — show graph neighbors BFS (`name`, `depth?`)
+- `path` — shortest path between nodes (`from_name`, `to_name`)
+- `summarize` — repository statistics (`repo?`)
+- `architecture` — detect/retrieve architecture (`detect?`)
+- `similar` — semantic similarity search (`target`, `limit?`)
+- `ask` — natural language question answering (`query`, `limit?`, `max_tokens?`)
+- `graph_data` — export graph as JSON (`limit?`, `offset?`, `dir?`, `expand_node_id?`)
+- `index` — index a repository (`path`)
+- `context` — generate structured context package (`top_n?`, `max_tokens?`)
+- `update_index` — incrementally re-index a single file (`file_path`)
+- `delete_file` — remove a deleted file from the graph (`file_path`)
+- `db_info` — show database statistics
+
+All tools accept optional `repo` and `db` parameters.
 
 **3 Resources** (readable by the AI assistant):
 - `cartographer://repos` — list all indexed repositories
@@ -649,21 +657,83 @@ Internally builds a three-section output:
 
 ## cartographer graph-data
 
-**Purpose:** Output graph data as JSON for the VS Code extension's interactive visualization. Uses degree-weighted sampling to produce a connected subgraph.
+**Purpose:** Output graph data as JSON for the VS Code extension's interactive visualization. Uses degree-weighted hub sampling to produce a connected subgraph.
 
 ```bash
 cartographer graph-data [OPTIONS]
 
 Options:
-  -r, --repo TEXT         Repository name
-  -l, --limit INT         Max nodes to sample (default: 80)
+  -r, --repo TEXT              Repository name
+  -l, --limit INT              Max nodes to sample (default: 80)
+  -o, --offset INT             Skip N hub groups for pagination
+  -d, --dir TEXT               Filter by directory prefix
+  --expand-node-id INT         Fetch a specific node and its immediate neighbors
 
 Examples:
   cartographer graph-data
   cartographer graph-data -r myproject -l 150
+  cartographer graph-data -l 400 --offset 1          # Next page
+  cartographer graph-data -d src/components           # Filter by dir
+  cartographer graph-data --expand-node-id 42         # Expand a node
 ```
 
-Returns JSON with `total_nodes`, `total_edges`, `node_types` summary, and sampled `nodes`/`edges` arrays.
+Returns JSON with `total_nodes`, `total_edges`, `node_types`, `directories`, and sampled `nodes`/`edges` arrays.
+
+### Hub-based Sampling Algorithm
+
+Graph-data uses degree-weighted sampling to produce connected subgraphs:
+1. Pick **hub nodes** (highest-degree nodes, skipping `offset` groups)
+2. Add their **immediate neighbors** via edge join
+3. Fill remaining slots with next-highest-degree nodes not yet included
+4. This ensures the sampled subgraph is connected (hubs + neighbors) rather than random isolated nodes
+
+---
+
+## cartographer watch
+
+**Purpose:** Watch a repository for file changes and automatically update the knowledge graph. Requires the `watchdog` Python package.
+
+```bash
+cartographer watch PATH
+
+Examples:
+  cartographer watch .
+  cartographer watch /path/to/repo
+```
+
+Uses `watchdog.observers.Observer` to monitor filesystem events. When a file is modified, it calls `update-index`; when a file is deleted, it calls `delete-file`. Changes are debounced and batched.
+
+---
+
+## cartographer update-index
+
+**Purpose:** Incrementally re-index a single file after changes — much faster than a full re-index.
+
+```bash
+cartographer update-index FILE_PATH
+
+Examples:
+  cartographer update-index src/main.py
+  cartographer update-index /path/to/repo/src/utils.ts
+```
+
+Parses the file, diffs entity IDs against the existing graph, deletes stale nodes/edges/embeddings, inserts new ones, and re-embeds only the changed nodes.
+
+---
+
+## cartographer delete-file
+
+**Purpose:** Remove a deleted file and all its entities (nodes, edges, embeddings) from the graph.
+
+```bash
+cartographer delete-file FILE_PATH
+
+Examples:
+  cartographer delete-file src/removed.py
+  cartographer delete-file /path/to/repo/src/deprecated.ts
+```
+
+Resolves the repository by path prefix matching, calls `delete_file_from_graph()` to cascade-delete all nodes belonging to the file, and re-embeds remaining nodes to keep the embedding index consistent.
 
 ---
 

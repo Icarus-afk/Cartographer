@@ -278,7 +278,7 @@ Agent: Calls cartographer search "auth" → 200 tokens
 
 ### 5.4 MCP Integration
 
-Cartographer runs a full MCP server exposing 8 tools and 3 resources:
+Cartographer runs a full MCP server exposing 14 tools and 3 resources:
 
 ```
 Tools:

@@ -82,7 +82,7 @@ cd /path/to/repo && cartographer --db /path/to/index.db git index
 Instead of configuring individual tools, you can run the MCP server directly. Cartographer supports the Model Context Protocol (MCP), which lets AI assistants discover and call tools automatically:
 
 ```bash
-cartographer mcp
+cartographer mcp start
 ```
 
 Configure your assistant to connect to the MCP server:
@@ -99,7 +99,7 @@ Configure your assistant to connect to the MCP server:
 }
 ```
 
-The MCP server exposes 8 tools and 3 resources. Tools include `search`, `impact`, `neighbors`, `path`, `summarize`, `architecture`, `similar`, and `ask`. Resources include `cartographer://repos`, `cartographer://repo/{name}`, and `cartographer://node/{node_id}`.
+The MCP server exposes **14 tools** — `search`, `impact`, `neighbors`, `path`, `summarize`, `architecture`, `similar`, `ask`, `graph_data`, `index`, `context`, `update_index`, `delete_file`, and `db_info` — plus 3 resources (`cartographer://repos`, `cartographer://repo/{name}`, `cartographer://node/{node_id}`). All tools accept optional `repo` and `db` parameters.
 
 ---
 
@@ -108,9 +108,10 @@ The MCP server exposes 8 tools and 3 resources. Tools include `search`, `impact`
 ### Tool Selection Guide
 
 | Agent Task | Best Tool | Why |
-|---|---|---|
+|---|---|---|---|
 | "What is this project?" | `cartographer-summarize` | High-level overview |
 | "Explain the architecture" | `cartographer-architecture` | Layer + pattern detection |
+| "Give me full context" | `cartographer-context` | Token-budgeted summary + architecture + top nodes |
 | "How does X work?" | `cartographer-query "explain X"` | Combines search + impact |
 | "Where is Y defined?" | `cartographer-ask Y` | Direct symbol lookup |
 | "What uses Z?" | `cartographer-query "what depends on Z"` | Impact analysis grouped by edge type |
@@ -247,13 +248,12 @@ For CI/CD integration, create a re-indexing script:
 ```bash
 #!/bin/bash
 # reindex.sh — Run after code changes
-DB_PATH="${CARTOGRAPHER_DB:-~/.cartographer/index.db}"
 REPO_PATH="${1:-.}"
 
 echo "Re-indexing $REPO_PATH..."
-cartographer --db "$DB_PATH" index "$REPO_PATH"
-cartographer --db "$DB_PATH" embed
-echo "Done. Updated knowledge graph at $DB_PATH"
+CARTOGRAPHER_DB="$DB_PATH" cartographer index "$REPO_PATH"
+CARTOGRAPHER_DB="$DB_PATH" cartographer embed
+echo "Done. Updated knowledge graph at $REPO_PATH/.cartographer/data.db"
 ```
 
 ---

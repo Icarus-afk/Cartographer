@@ -115,7 +115,7 @@ flowchart TB
     RE --> GI["Git Intelligence<br/>Commits, blame<br/>Co-change analysis"]
     RE --> CE["Compression Engine<br/>Token-budget-aware<br/>4 strategies"]
     RE --> QP["Query Planner<br/>NL intent classification<br/>9 intent types"]
-    RE --> MCP["MCP Server<br/>8 tools, 3 resources<br/>Auto-discovery"]
+    RE --> MCP["MCP Server<br/>14 tools, 3 resources<br/>Auto-discovery"]
     MCP --> CLI["CLI / VS Code Extension / OpenCode / Claude Desktop"]
 ```
 
@@ -341,7 +341,7 @@ xychart-beta
 
 ### 5.4 MCP Integration
 
-Cartographer runs a full MCP server exposing 8 tools and 3 resources:
+Cartographer runs a full MCP server exposing 14 tools and 3 resources:
 
 ```
 Tools:
