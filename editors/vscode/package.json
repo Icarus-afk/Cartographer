@@ -26,13 +26,19 @@
       { "command": "cartographer.graph", "title": "Cartographer: Open Graph Visualization", "icon": "$(graph)" },
       { "command": "cartographer.gitIndex", "title": "Cartographer: Index Git History", "icon": "$(git-commit)" },
       { "command": "cartographer.openDb", "title": "Cartographer: Select Database", "icon": "$(folder-opened)" },
-      { "command": "cartographer.refresh", "title": "Cartographer: Refresh Views", "icon": "$(refresh)" }
+      { "command": "cartographer.refresh", "title": "Cartographer: Refresh Views", "icon": "$(refresh)" },
+      { "command": "cartographer.watch", "title": "Cartographer: Watch for File Changes", "icon": "$(eye)" },
+      { "command": "cartographer.context", "title": "Cartographer: Generate Context Package", "icon": "$(package)" },
+      { "command": "cartographer.dbInfo", "title": "Cartographer: Database Info", "icon": "$(database)" }
     ],
     "keybindings": [
       { "key": "ctrl+shift+c i", "command": "cartographer.index" },
       { "key": "ctrl+shift+c s", "command": "cartographer.search" },
       { "key": "ctrl+shift+c a", "command": "cartographer.ask" },
-      { "key": "ctrl+shift+c g", "command": "cartographer.graph" }
+      { "key": "ctrl+shift+c g", "command": "cartographer.graph" },
+      { "key": "ctrl+shift+c w", "command": "cartographer.watch" },
+      { "key": "ctrl+shift+c d", "command": "cartographer.dbInfo" },
+      { "key": "ctrl+shift+c c", "command": "cartographer.context" }
     ],
     "configuration": {
       "title": "Cartographer",
@@ -61,6 +67,16 @@
           "type": "integer",
           "default": 400,
           "description": "Max nodes to display in the graph visualization (higher values may be slower)"
+        },
+        "cartographer.mcpEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use MCP server for persistent communication (faster than CLI)"
+        },
+        "cartographer.projectConfig": {
+          "type": "string",
+          "default": "",
+          "description": "Path to project config file (default: .cartographer/config.json in workspace root)"
         }
       }
     },
@@ -86,7 +102,10 @@
         { "command": "cartographer.impact" },
         { "command": "cartographer.graph" },
         { "command": "cartographer.graphEntityType" },
-        { "command": "cartographer.embed" }
+        { "command": "cartographer.embed" },
+        { "command": "cartographer.watch" },
+        { "command": "cartographer.context" },
+        { "command": "cartographer.dbInfo" }
       ],
       "view/title": [
         { "command": "cartographer.index", "when": "view == cartographer.repos", "group": "navigation" },

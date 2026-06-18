@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { CartographerClient, SearchResult } from "./cartographer";
 import { RepoTreeProvider, EntityTreeProvider, SearchTreeProvider, SearchItem } from "./treeViews";
 import { createGraphWebview } from "./graphWebview";
+import { readProjectConfig, watchConfig, resolveDbPath } from "./config";
 
 let client: CartographerClient;
 let repoTree: RepoTreeProvider;
@@ -11,8 +12,20 @@ let statusBar: vscode.StatusBarItem;
 
 export function activate(ctx: vscode.ExtensionContext): void {
   const ch = vscode.window.createOutputChannel("Cartographer");
-  client = new CartographerClient(ch);
+  const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "";
+
+  // Read project config
+  const projCfg = readProjectConfig(wsRoot);
+  client = new CartographerClient(ch, wsRoot);
   ctx.subscriptions.push(ch);
+
+  // Watch .cartographer/config.json for changes
+  if (wsRoot) {
+    ctx.subscriptions.push(watchConfig(wsRoot, () => {
+      repoTree.refresh();
+      updateStatusBar();
+    }));
+  }
 
   repoTree = new RepoTreeProvider(client);
   entityTree = new EntityTreeProvider(client);
@@ -33,6 +46,13 @@ export function activate(ctx: vscode.ExtensionContext): void {
 
   ctx.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => updateStatusBar()));
 
+  // Start MCP server as persistent child process
+  if (wsRoot) {
+    client.startMcp().then(() => {
+      ch.appendLine("MCP server connected");
+    });
+  }
+
   // Register all commands
   const cmds: [string, (...args: any[]) => any][] = [
     ["cartographer.index", cmdIndex],
@@ -51,18 +71,22 @@ export function activate(ctx: vscode.ExtensionContext): void {
     ["cartographer.openDb", cmdOpenDb],
     ["cartographer.refresh", cmdRefresh],
     ["cartographer.searchType", cmdSearchByType],
+    ["cartographer.watch", cmdWatch],
+    ["cartographer.context", cmdContext],
+    ["cartographer.dbInfo", cmdDbInfo],
   ];
 
   for (const [id, fn] of cmds) {
     ctx.subscriptions.push(vscode.commands.registerCommand(id, fn));
   }
 
-  // Hover provider: show node info on code hover (debounced + cached)
+  // Hover provider: debounced + cached
   let hoverTimer: NodeJS.Timeout | undefined;
   const hoverCache = new Map<string, { results: SearchResult[]; time: number }>();
   ctx.subscriptions.push(
     vscode.languages.registerHoverProvider("*", {
       provideHover(document, position) {
+        if (!client) return null;
         const range = document.getWordRangeAtPosition(position);
         if (!range) return null;
         const word = document.getText(range);
@@ -79,9 +103,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
               const results = await client.search(word);
               hoverCache.set(word, { results, time: Date.now() });
               resolve(results.length > 0 ? formatHover(results) : null);
-            } catch {
-              resolve(null);
-            }
+            } catch { resolve(null); }
           }, 300);
         });
       },
@@ -89,12 +111,11 @@ export function activate(ctx: vscode.ExtensionContext): void {
   );
 
   // Trim cache every 5 min
-  setInterval(() => {
+  const trimInterval = setInterval(() => {
     const cutoff = Date.now() - 120000;
-    for (const [k, v] of hoverCache) {
-      if (v.time < cutoff) hoverCache.delete(k);
-    }
+    for (const [k, v] of hoverCache) { if (v.time < cutoff) hoverCache.delete(k); }
   }, 300000);
+  ctx.subscriptions.push({ dispose: () => clearInterval(trimInterval) });
 
   // Selection-based search context menu
   ctx.subscriptions.push(
@@ -108,9 +129,9 @@ export function activate(ctx: vscode.ExtensionContext): void {
 
   // Auto-index workspace on activation if not already indexed
   (async () => {
-    const wsName = vscode.workspace.workspaceFolders?.[0]?.name;
-    if (!wsName) { updateStatusBar(); return; }
-    const repoName = await client.resolveRepoName();
+    if (!wsRoot) { updateStatusBar(); return; }
+    if (projCfg.autoReindex === false) { updateStatusBar(); return; }
+    const repoName = await resolveRepoQuick();
     if (repoName) { updateStatusBar(); return; }
     vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: "Cartographer: Indexing repository..." },
@@ -123,39 +144,55 @@ export function activate(ctx: vscode.ExtensionContext): void {
     );
   })();
 
-  // Auto re-index: only watch relevant files, debounced
+  // File watcher: incremental re-index on save (not full re-index)
   let reindexTimer: NodeJS.Timeout | undefined;
-  const scheduleReindex = (uri: vscode.Uri) => {
-    if (!client.cfg("autoReindex", true)) return;
-    const wsName = vscode.workspace.workspaceFolders?.[0]?.name;
-    if (!wsName) return;
-    if (reindexTimer) clearTimeout(reindexTimer);
-    reindexTimer = setTimeout(async () => {
-      const repoName = await client.resolveRepoName();
-      if (!repoName) return;
-      statusBar.text = "$(sync~spin) Cartographer";
-      await client.index();
-      repoTree.refresh();
-      entityTree.refresh();
-      updateStatusBar();
-    }, 2000);
-  };
-  // Only watch source code files, not node_modules, .git, etc.
-  const watcher = vscode.workspace.createFileSystemWatcher("**/*.{py,js,ts,jsx,tsx,rs,go,java,kt,kts,cs,php,rb,c,h,cpp,hpp,cc,cxx,swift,scala,sc,ex,exs,lua,jl,zig,groovy,gvy,gsh}");
+  const changedFiles = new Set<string>();
   ctx.subscriptions.push(
-    watcher.onDidCreate(scheduleReindex),
-    watcher.onDidDelete(scheduleReindex),
-    watcher.onDidChange(scheduleReindex),
-    watcher,
-  );
-  ctx.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument(doc => {
-      if (doc.uri.scheme === "file") scheduleReindex(doc.uri);
+    vscode.workspace.onDidSaveTextDocument(async (doc) => {
+      if (!wsRoot) return;
+      if (!projCfg.autoReindex) return;
+      if (doc.uri.scheme !== "file") return;
+      if (!doc.fileName.startsWith(wsRoot)) return;
+      if (isIgnored(doc.fileName, wsRoot)) return;
+
+      changedFiles.add(doc.fileName);
+      if (reindexTimer) clearTimeout(reindexTimer);
+      reindexTimer = setTimeout(async () => {
+        const files = Array.from(changedFiles);
+        changedFiles.clear();
+        statusBar.text = "$(sync~spin) Cartographer";
+
+        // Use the CLI watch/update-index for incremental update
+        for (const f of files) {
+          try {
+            await client.index(f);
+          } catch { /* ignore single file errors */ }
+        }
+        repoTree.refresh();
+        entityTree.refresh();
+        updateStatusBar();
+      }, 2000);
     }),
   );
 }
 
-// ── Status bar ────────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+function isIgnored(filePath: string, root: string): boolean {
+  const rel = filePath.startsWith(root) ? filePath.slice(root.length) : filePath;
+  const ignored = ["node_modules", ".git", ".cartographer", "__pycache__", "venv", ".venv", "dist", "build", ".next", "target"];
+  for (const dir of ignored) {
+    if (rel.startsWith(`/${dir}`) || rel.startsWith(`${dir}`)) return true;
+  }
+  return false;
+}
+
+async function resolveRepoQuick(): Promise<string | null> {
+  try {
+    const sum = await client.summarize();
+    return sum?.name || null;
+  } catch { return null; }
+}
 
 async function updateStatusBar(): Promise<void> {
   try {
@@ -168,18 +205,11 @@ async function updateStatusBar(): Promise<void> {
       statusBar.text = "$(graph) Cartographer";
       statusBar.tooltip = "No repo indexed";
     }
-  } catch {
-    statusBar.text = "$(graph) Cartographer";
-  }
+  } catch { statusBar.text = "$(graph) Cartographer"; }
 }
 
-// ── Command implementations ───────────────────────────────────────────────
-
 function withProgress<T>(title: string, fn: () => Promise<T>): Thenable<T> {
-  return vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title },
-    async () => fn(),
-  );
+  return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title }, () => fn());
 }
 
 function formatHover(results: SearchResult[]): vscode.Hover {
@@ -201,6 +231,8 @@ function showOutput(title: string, text: string): void {
 function showError(msg: string): void {
   vscode.window.showErrorMessage(`Cartographer: ${msg}`);
 }
+
+// ── Command implementations ───────────────────────────────────────────────
 
 async function cmdIndex(): Promise<void> {
   withProgress("Cartographer: Indexing repository...", async () => {
@@ -230,16 +262,12 @@ async function cmdSearchByType(entityType: string): Promise<void> {
     if (results.length > 0) {
       vscode.window.showInformationMessage(`Found ${results.length} ${entityType}s`);
     } else {
-      vscode.window.showWarningMessage(
-        `Found 0 ${entityType}s. Check the Cartographer output channel for details.`
-      );
+      vscode.window.showWarningMessage(`Found 0 ${entityType}s. Check the Cartographer output channel for details.`);
     }
   });
 }
 
-function cmdSearchWith(query?: string): void {
-  cmdSearch(query);
-}
+function cmdSearchWith(query?: string): void { cmdSearch(query); }
 
 async function cmdSearch(initial?: string): Promise<void> {
   const q = await vscode.window.showInputBox({
@@ -393,6 +421,37 @@ async function cmdRefresh(): Promise<void> {
   vscode.window.showInformationMessage("Cartographer views refreshed");
 }
 
+// ── New commands ─────────────────────────────────────────────────────────
+
+async function cmdWatch(): Promise<void> {
+  const wsRoot = client.projectRoot;
+  if (!wsRoot) return void showError("No workspace folder open");
+  withProgress("Cartographer: Starting file watcher...", async () => {
+    vscode.window.showInformationMessage("Cartographer watch started (see output channel)");
+    const result = await client.invokeWatch(wsRoot);
+    const ch = vscode.window.createOutputChannel("Cartographer Watch");
+    ch.clear();
+    ch.appendLine(result);
+    ch.show();
+  });
+}
+
+async function cmdContext(): Promise<void> {
+  withProgress("Cartographer: Generating context package...", async () => {
+    const result = await client.getContext();
+    showOutput("Cartographer Context", result);
+  });
+}
+
+async function cmdDbInfo(): Promise<void> {
+  try {
+    const info = await client.dbInfo();
+    showOutput("Cartographer Database", info);
+  } catch (e) {
+    showError(`DB info failed: ${e}`);
+  }
+}
+
 export function deactivate(): void {
-  // cleanup
+  client?.stopMcp();
 }

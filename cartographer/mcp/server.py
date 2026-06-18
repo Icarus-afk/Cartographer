@@ -480,6 +480,87 @@ def index_repo(
     return "\n".join(lines)
 
 
+@mcp().tool(
+    name="context",
+    description="Generate a structured context package (graph + architecture + key nodes)",
+)
+def context_package(
+    repo: str | None = None,
+    top_n: int = 10,
+    max_tokens: int = 1500,
+    db: str | None = None,
+) -> str:
+    from cartographer.compression.engine import build_context_package
+    from cartographer.retrieval.summarizer import generate_summary
+
+    db_path = _db(db)
+    summary = generate_summary(db_path, repo)
+    if not summary:
+        return "No repository found. Run 'cartographer index' first."
+
+    arch = None
+    try:
+        arch_result = get_architecture(db_path, repo)
+        if "error" not in arch_result:
+            arch = arch_result
+    except Exception:
+        pass
+
+    top_nodes = None
+    try:
+        nodes = search_nodes("", db_path, repo, limit=top_n)
+        if nodes:
+            top_nodes = nodes
+    except Exception:
+        pass
+
+    result = build_context_package(summary, arch, top_nodes, max_tokens)
+    return result
+
+
+@mcp().tool(
+    name="update_index",
+    description="Incrementally re-index a single file after changes",
+)
+def update_index_tool(
+    file_path: str,
+    db: str | None = None,
+) -> str:
+    from cartographer.ingestion.engine import update_index
+    result = update_index(file_path, db_path=_db(db))
+    return json.dumps(result)
+
+
+@mcp().tool(
+    name="db_info",
+    description="Return statistics about the Cartographer database",
+)
+def db_info_tool(
+    db: str | None = None,
+) -> str:
+    import os
+    db_path = _db(db)
+    conn = _get_conn(db)
+    try:
+        repo_count = conn.execute("SELECT COUNT(*) FROM repositories").fetchone()[0]
+        node_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+        edge_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+        embed_count = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        commit_count = conn.execute("SELECT COUNT(*) FROM commits").fetchone()[0]
+    finally:
+        conn.close()
+    size = os.path.getsize(db_path) if db_path.exists() else 0
+    return json.dumps({
+        "path": str(db_path),
+        "size": size,
+        "repositories": repo_count,
+        "nodes": node_count,
+        "edges": edge_count,
+        "embeddings": embed_count,
+        "commits": commit_count,
+    })
+
+
 def main(db_path: Path | None = None, port: int | None = None) -> None:
     global _CUSTOM_DB_PATH
     if db_path is not None:
