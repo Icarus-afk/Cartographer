@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { CartographerClient, RepoInfo, type SearchResult } from "./cartographer";
+import { ClientManager } from "./clientManager";
 
 // ── Repository Tree ──────────────────────────────────────────────────────
 
@@ -10,6 +11,7 @@ export class RepoItem extends vscode.TreeItem {
     collapsible: vscode.TreeItemCollapsibleState,
     icon: string,
     cmd?: vscode.Command,
+    public readonly folderPath?: string,
   ) {
     super(label, collapsible);
     this.description = description;
@@ -24,7 +26,9 @@ export class RepoTreeProvider implements vscode.TreeDataProvider<RepoItem> {
   private _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this._onDidChange.event;
 
-  constructor(private client: CartographerClient) {}
+  constructor(private clients: ClientManager) {
+    clients.onDidChange(() => this._onDidChange.fire());
+  }
 
   refresh(): void { this._onDidChange.fire(); }
 
@@ -32,23 +36,32 @@ export class RepoTreeProvider implements vscode.TreeDataProvider<RepoItem> {
 
   async getChildren(el?: RepoItem): Promise<RepoItem[]> {
     if (el) return [];
-
-    const repos = await this.client.getRepos();
-    if (repos.length === 0) {
-      return Promise.resolve([
-        new RepoItem("No repository indexed", "Run Index Repository", vscode.TreeItemCollapsibleState.None, "question"),
-      ]);
+    const items: RepoItem[] = [];
+    const all = this.clients.allFolders();
+    let hasData = false;
+    for (const { folder, client } of all) {
+      try {
+        const s = await client.summarize();
+        if (s) {
+          hasData = true;
+          const folderName = vscode.workspace.workspaceFolders
+            ?.find(f => f.uri.fsPath === folder)?.name || folder.split("/").pop() || folder;
+          items.push(new RepoItem(
+            `${folderName}: ${s.name}`,
+            `${s.total_nodes} nodes · ${s.total_edges} edges`,
+            vscode.TreeItemCollapsibleState.Collapsed,
+            "repo",
+            { command: "cartographer.summarize", title: "Summary", arguments: [s.name] },
+            folder,
+          ));
+        }
+      } catch { /* skip unindexed folders */ }
     }
-
-    return Promise.resolve(
-      repos.map(r => new RepoItem(
-        r.name,
-        `${r.nodes} nodes · ${r.edges} edges`,
-        vscode.TreeItemCollapsibleState.Collapsed,
-        "repo",
-        { command: "cartographer.summarize", title: "Summary", arguments: [r.name] },
-      )),
-    );
+    if (!hasData) {
+      items.push(new RepoItem("No repository indexed", "Run Index Repository",
+        vscode.TreeItemCollapsibleState.None, "question"));
+    }
+    return items;
   }
 }
 
@@ -95,7 +108,9 @@ export class EntityTreeProvider implements vscode.TreeDataProvider<EntityItem> {
   readonly onDidChangeTreeData = this._onDidChange.event;
   private _repoName: string | undefined;
 
-  constructor(private client: CartographerClient) {}
+  constructor(private clients: ClientManager) {
+    clients.onDidChange(() => this._onDidChange.fire());
+  }
 
   setRepo(name?: string): void {
     this._repoName = name;
@@ -110,16 +125,18 @@ export class EntityTreeProvider implements vscode.TreeDataProvider<EntityItem> {
   getTreeItem(el: EntityItem): vscode.TreeItem { return el; }
 
   async getChildren(): Promise<EntityItem[]> {
-    const s = await this.client.summarize(this._repoName);
+    const c = this.clients.active();
+    if (!c) {
+      return [new EntityItem("No folder open", 0, "", vscode.TreeItemCollapsibleState.None)];
+    }
+    const s = await c.summarize(this._repoName);
     if (!s?.node_breakdown || Object.keys(s.node_breakdown).length === 0) {
-      return Promise.resolve([
-        new EntityItem("No data", 0, "", vscode.TreeItemCollapsibleState.None),
-      ]);
+      return [new EntityItem("No data", 0, "", vscode.TreeItemCollapsibleState.None)];
     }
     const items = Object.entries(s.node_breakdown)
       .sort((a, b) => b[1] - a[1])
       .map(([type, count]) => new EntityItem(type, count, type, vscode.TreeItemCollapsibleState.None));
-    return Promise.resolve(items);
+    return items;
   }
 }
 

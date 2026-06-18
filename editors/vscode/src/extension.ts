@@ -1,34 +1,42 @@
 import * as vscode from "vscode";
 import { CartographerClient, SearchResult } from "./cartographer";
+import { ClientManager } from "./clientManager";
 import { RepoTreeProvider, EntityTreeProvider, SearchTreeProvider, SearchItem } from "./treeViews";
 import { createGraphWebview } from "./graphWebview";
 import { readProjectConfig, watchConfig, resolveDbPath } from "./config";
 
-let client: CartographerClient;
+let clients: ClientManager;
 let repoTree: RepoTreeProvider;
 let entityTree: EntityTreeProvider;
 let searchTree: SearchTreeProvider;
 let statusBar: vscode.StatusBarItem;
 
-export function activate(ctx: vscode.ExtensionContext): void {
+export function activate(_ctx: vscode.ExtensionContext): void {
+  ctx = _ctx;
   const ch = vscode.window.createOutputChannel("Cartographer");
-  const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "";
-
-  // Read project config
-  const projCfg = readProjectConfig(wsRoot);
-  client = new CartographerClient(ch, wsRoot);
+  clients = new ClientManager(ch);
   ctx.subscriptions.push(ch);
 
-  // Watch .cartographer/config.json for changes
-  if (wsRoot) {
-    ctx.subscriptions.push(watchConfig(wsRoot, () => {
+  // Initialize clients for all workspace folders
+  const folders = vscode.workspace.workspaceFolders || [];
+  clients.ensureFolders(folders);
+  if (folders.length > 0) {
+    clients.startAll().then(() => {
+      ch.appendLine(`MCP connected for ${folders.length} folder(s)`);
+    });
+  }
+
+  // Watch .cartographer/config.json per folder
+  for (const f of folders) {
+    ctx.subscriptions.push(watchConfig(f.uri.fsPath, () => {
       repoTree.refresh();
       updateStatusBar();
     }));
   }
 
-  repoTree = new RepoTreeProvider(client);
-  entityTree = new EntityTreeProvider(client);
+  // Tree views
+  repoTree = new RepoTreeProvider(clients);
+  entityTree = new EntityTreeProvider(clients);
   searchTree = new SearchTreeProvider();
   ctx.subscriptions.push(
     vscode.window.registerTreeDataProvider("cartographer.repos", repoTree),
@@ -44,14 +52,25 @@ export function activate(ctx: vscode.ExtensionContext): void {
   statusBar.show();
   ctx.subscriptions.push(statusBar);
 
-  ctx.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => updateStatusBar()));
-
-  // Start MCP server as persistent child process
-  if (wsRoot) {
-    client.startMcp().then(() => {
-      ch.appendLine("MCP server connected");
-    });
-  }
+  // Handle folder changes
+  ctx.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders((e) => {
+    for (const f of e.removed) {
+      const c = clients.get(f.uri.fsPath);
+      c.stopMcp();
+    }
+    clients.ensureFolders(vscode.workspace.workspaceFolders || []);
+    for (const f of e.added) {
+      const c = clients.get(f.uri.fsPath);
+      c.startMcp().catch(() => ch.appendLine(`MCP start failed for ${f.name}`));
+      ctx.subscriptions.push(watchConfig(f.uri.fsPath, () => {
+        repoTree.refresh();
+        updateStatusBar();
+      }));
+    }
+    repoTree.refresh();
+    entityTree.refresh();
+    updateStatusBar();
+  }));
 
   // Register all commands
   const cmds: [string, (...args: any[]) => any][] = [
@@ -66,8 +85,8 @@ export function activate(ctx: vscode.ExtensionContext): void {
     ["cartographer.similar", cmdSimilar],
     ["cartographer.embed", cmdEmbed],
     ["cartographer.gitIndex", cmdGitIndex],
-    ["cartographer.graph", () => createGraphWebview(client, ctx.extensionUri)],
-    ["cartographer.graphEntityType", (t: string) => createGraphWebview(client, ctx.extensionUri, t, entityTree.currentRepo())],
+    ["cartographer.graph", cmdGraph],
+    ["cartographer.graphEntityType", (t: string) => cmdGraph(t, entityTree.currentRepo())],
     ["cartographer.openDb", cmdOpenDb],
     ["cartographer.refresh", cmdRefresh],
     ["cartographer.searchType", cmdSearchByType],
@@ -80,13 +99,14 @@ export function activate(ctx: vscode.ExtensionContext): void {
     ctx.subscriptions.push(vscode.commands.registerCommand(id, fn));
   }
 
-  // Hover provider: debounced + cached
+  // Hover provider: debounced + cached, uses active client
   let hoverTimer: NodeJS.Timeout | undefined;
   const hoverCache = new Map<string, { results: SearchResult[]; time: number }>();
   ctx.subscriptions.push(
     vscode.languages.registerHoverProvider("*", {
       provideHover(document, position) {
-        if (!client) return null;
+        const c = clients.forUri(document.uri);
+        if (!c) return null;
         const range = document.getWordRangeAtPosition(position);
         if (!range) return null;
         const word = document.getText(range);
@@ -100,7 +120,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
           if (hoverTimer) clearTimeout(hoverTimer);
           hoverTimer = setTimeout(async () => {
             try {
-              const results = await client.search(word);
+              const results = await c.search(word);
               hoverCache.set(word, { results, time: Date.now() });
               resolve(results.length > 0 ? formatHover(results) : null);
             } catch { resolve(null); }
@@ -127,118 +147,132 @@ export function activate(ctx: vscode.ExtensionContext): void {
     }),
   );
 
-  // Auto-index workspace on activation if not already indexed
+  // Auto-index each unindexed folder on activation
   (async () => {
-    if (!wsRoot) { updateStatusBar(); return; }
-    if (projCfg.autoReindex === false) { updateStatusBar(); return; }
-    const repoName = await resolveRepoQuick();
-    if (repoName) { updateStatusBar(); return; }
-    vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: "Cartographer: Indexing repository..." },
-      async () => {
-        await client.index();
-        repoTree.refresh();
-        entityTree.refresh();
-        updateStatusBar();
-      },
-    );
+    if (folders.length === 0) { updateStatusBar(); return; }
+    const indexed: string[] = [];
+    for (const f of folders) {
+      const c = clients.get(f.uri.fsPath);
+      const cfg = readProjectConfig(f.uri.fsPath);
+      if (cfg.autoReindex === false) continue;
+      try {
+        const s = await c.summarize();
+        if (s) { indexed.push(f.name); continue; }
+      } catch { /* not indexed */ }
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Cartographer: Indexing ${f.name}...` },
+        async () => { await c.index(); },
+      );
+      repoTree.refresh();
+      entityTree.refresh();
+      updateStatusBar();
+    }
+    if (indexed.length > 0) {
+      ch.appendLine(`Already indexed: ${indexed.join(", ")}`);
+    }
   })();
 
-  // File watcher: incremental re-index via update_index/delete_file MCP tools
+  // File watchers: per-folder incremental re-index via MCP
   let reindexTimer: NodeJS.Timeout | undefined;
-  let progressKey: string | undefined;
-  const pendingFiles = new Set<string>();
+  const pendingChanges = new Map<string, string>(); // filePath -> "+"/"-"
   function scheduleReindex() {
     if (reindexTimer) clearTimeout(reindexTimer);
     reindexTimer = setTimeout(flushReindex, 2000);
   }
   async function flushReindex() {
-    const files = Array.from(pendingFiles);
-    pendingFiles.clear();
-    if (files.length === 0) return;
+    if (pendingChanges.size === 0) return;
+    const entries = Array.from(pendingChanges.entries());
+    pendingChanges.clear();
     statusBar.text = "$(sync~spin) Cartographer";
-    progressKey = "updating";
-    for (const f of files) {
+    for (const [filePath, op] of entries) {
+      const c = clients.forUri(vscode.Uri.file(filePath));
+      if (!c) continue;
       try {
-        if (f.startsWith("+")) {
-          const raw = f.slice(1);
-          await client.updateFile(raw);
-        } else if (f.startsWith("-")) {
-          const raw = f.slice(1);
-          await client.deleteFile(raw);
-        }
+        if (op === "+") await c.updateFile(filePath);
+        else await c.deleteFile(filePath);
       } catch { /* ignore single file errors */ }
     }
-    progressKey = undefined;
     repoTree.refresh();
     entityTree.refresh();
     updateStatusBar();
   }
+  function isIgnored(filePath: string, root: string): boolean {
+    const rel = filePath.startsWith(root) ? filePath.slice(root.length) : filePath;
+    const ignored = ["node_modules", ".git", ".cartographer", "__pycache__", "venv", ".venv", "dist", "build", ".next", "target"];
+    for (const dir of ignored) {
+      if (rel.startsWith(`/${dir}`) || rel.startsWith(`${dir}`)) return true;
+    }
+    return false;
+  }
   ctx.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(async (doc) => {
-      if (!wsRoot) return;
-      if (!projCfg.autoReindex) return;
       if (doc.uri.scheme !== "file") return;
-      if (!doc.fileName.startsWith(wsRoot)) return;
-      if (isIgnored(doc.fileName, wsRoot)) return;
-      pendingFiles.add("+" + doc.fileName);
+      if (isIgnored(doc.fileName, "")) return;
+      const c = clients.forUri(doc.uri);
+      if (!c) return;
+      const cfg = readProjectConfig(c.projectRoot);
+      if (cfg.autoReindex === false) return;
+      if (isIgnored(doc.fileName, c.projectRoot)) return;
+      pendingChanges.set(doc.fileName, "+");
       scheduleReindex();
     }),
     vscode.workspace.onDidDeleteFiles(async (event) => {
-      if (!wsRoot) return;
-      if (!projCfg.autoReindex) return;
       for (const uri of event.files) {
-        if (!uri.fsPath.startsWith(wsRoot)) continue;
-        if (isIgnored(uri.fsPath, wsRoot)) continue;
-        pendingFiles.add("-" + uri.fsPath);
+        const c = clients.forUri(uri);
+        if (!c) continue;
+        const cfg = readProjectConfig(c.projectRoot);
+        if (cfg.autoReindex === false) continue;
+        if (isIgnored(uri.fsPath, c.projectRoot)) continue;
+        pendingChanges.set(uri.fsPath, "-");
       }
       if (event.files.length > 0) scheduleReindex();
     }),
     vscode.workspace.onDidRenameFiles(async (event) => {
-      if (!wsRoot) return;
-      if (!projCfg.autoReindex) return;
       for (const file of event.files) {
-        if (!file.oldUri.fsPath.startsWith(wsRoot)) continue;
-        if (isIgnored(file.oldUri.fsPath, wsRoot)) continue;
-        pendingFiles.add("-" + file.oldUri.fsPath);
-        pendingFiles.add("+" + file.newUri.fsPath);
+        const c = clients.forUri(file.oldUri);
+        if (!c) continue;
+        const cfg = readProjectConfig(c.projectRoot);
+        if (cfg.autoReindex === false) continue;
+        if (isIgnored(file.oldUri.fsPath, c.projectRoot)) continue;
+        pendingChanges.set(file.oldUri.fsPath, "-");
+        pendingChanges.set(file.newUri.fsPath, "+");
       }
       if (event.files.length > 0) scheduleReindex();
     }),
   );
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────
-
-function isIgnored(filePath: string, root: string): boolean {
-  const rel = filePath.startsWith(root) ? filePath.slice(root.length) : filePath;
-  const ignored = ["node_modules", ".git", ".cartographer", "__pycache__", "venv", ".venv", "dist", "build", ".next", "target"];
-  for (const dir of ignored) {
-    if (rel.startsWith(`/${dir}`) || rel.startsWith(`${dir}`)) return true;
-  }
-  return false;
-}
-
-async function resolveRepoQuick(): Promise<string | null> {
-  try {
-    const sum = await client.summarize();
-    return sum?.name || null;
-  } catch { return null; }
-}
+// ── Status bar ──────────────────────────────────────────────────────────
 
 async function updateStatusBar(): Promise<void> {
   try {
-    const sum = await client.summarize();
-    if (sum) {
-      const ws = vscode.workspace.workspaceFolders?.[0]?.name || sum.name;
-      statusBar.text = `$(graph) ${ws}  ${sum.total_nodes}N/${sum.total_edges}E`;
-      statusBar.tooltip = `${sum.name}: ${sum.total_nodes} nodes, ${sum.total_edges} edges`;
+    const active = clients.active();
+    if (active) {
+      const s = await active.summarize();
+      if (s) {
+        const ws = vscode.workspace.workspaceFolders
+          ?.find(f => active.projectRoot.startsWith(f.uri.fsPath))?.name || s.name;
+        statusBar.text = `$(graph) ${ws}  ${s.total_nodes}N/${s.total_edges}E`;
+        statusBar.tooltip = `${s.name}: ${s.total_nodes} nodes, ${s.total_edges} edges`;
+        return;
+      }
+    }
+    // Fallback: aggregate all folders
+    const all = await clients.allSummaries();
+    if (all.length > 0) {
+      const totalNodes = all.reduce((a, b) => a + b.nodes, 0);
+      const totalEdges = all.reduce((a, b) => a + b.edges, 0);
+      const names = all.length === 1 ? all[0].name : `${all.length} repos`;
+      statusBar.text = `$(graph) ${names}  ${totalNodes}N/${totalEdges}E`;
+      statusBar.tooltip = all.map(s => `${s.folder}: ${s.nodes}N/${s.edges}E`).join("\n");
     } else {
       statusBar.text = "$(graph) Cartographer";
       statusBar.tooltip = "No repo indexed";
     }
   } catch { statusBar.text = "$(graph) Cartographer"; }
 }
+
+// ── Helpers ──────────────────────────────────────────────────────────────
 
 function withProgress<T>(title: string, fn: () => Promise<T>): Thenable<T> {
   return vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title }, () => fn());
@@ -264,31 +298,51 @@ function showError(msg: string): void {
   vscode.window.showErrorMessage(`Cartographer: ${msg}`);
 }
 
+function pickFolder(): CartographerClient | undefined {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
+    showError("No workspace folder open");
+    return;
+  }
+  if (folders.length === 1) return clients.get(folders[0].uri.fsPath);
+  // Ask user to pick
+  const active = clients.active();
+  if (active) return active;
+  return clients.get(folders[0].uri.fsPath);
+}
+
 // ── Command implementations ───────────────────────────────────────────────
 
 async function cmdIndex(): Promise<void> {
-  withProgress("Cartographer: Indexing repository...", async () => {
-    const r = await client.index();
-    if (r.success) {
-      vscode.window.showInformationMessage(`Indexed ${r.files} files in ${r.duration_ms}ms`);
-      repoTree.refresh();
-      entityTree.refresh();
-      updateStatusBar();
-    } else {
-      const msg = r.errors[0]?.replace(/^Error:\s*/, "") || "Index command failed";
-      vscode.window.showErrorMessage(`Cartographer index failed: ${msg}`);
-      const ch = vscode.window.createOutputChannel("Cartographer Index");
-      ch.clear();
-      ch.appendLine(r.errors.join("\n"));
-      ch.show();
-    }
-  });
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) return void showError("No workspace folder open");
+  for (const f of folders) {
+    await withProgress(`Cartographer: Indexing ${f.name}...`, async () => {
+      const c = clients.get(f.uri.fsPath);
+      const r = await c.index();
+      if (r.success) {
+        vscode.window.showInformationMessage(`${f.name}: Indexed ${r.files} files in ${r.duration_ms}ms`);
+      } else {
+        const msg = r.errors[0]?.replace(/^Error:\s*/, "") || "Index command failed";
+        vscode.window.showErrorMessage(`${f.name}: ${msg}`);
+        const ch = vscode.window.createOutputChannel(`Cartographer Index ${f.name}`);
+        ch.clear();
+        ch.appendLine(r.errors.join("\n"));
+        ch.show();
+      }
+    });
+  }
+  repoTree.refresh();
+  entityTree.refresh();
+  updateStatusBar();
 }
 
 async function cmdSearchByType(entityType: string): Promise<void> {
   if (!entityType) return;
+  const c = pickFolder();
+  if (!c) return;
   withProgress(`Cartographer: Loading ${entityType}s...`, async () => {
-    const results = await client.searchByType(entityType, 100, entityTree.currentRepo());
+    const results = await c.searchByType(entityType, 100, entityTree.currentRepo());
     searchTree.setResults(results);
     vscode.commands.executeCommand("workbench.view.extension.cartographer");
     if (results.length > 0) {
@@ -302,32 +356,38 @@ async function cmdSearchByType(entityType: string): Promise<void> {
 function cmdSearchWith(query?: string): void { cmdSearch(query); }
 
 async function cmdSearch(initial?: string): Promise<void> {
+  const c = pickFolder();
+  if (!c) return;
   const q = await vscode.window.showInputBox({
     prompt: "Search the knowledge graph",
     placeHolder: "class name, function, file...",
     value: initial || "",
   });
   if (!q) return;
-  const results = await client.search(q);
+  const results = await c.search(q);
   searchTree.setResults(results);
   vscode.commands.executeCommand("workbench.view.extension.cartographer");
   vscode.window.showInformationMessage(`Found ${results.length} results for "${q}"`);
 }
 
 async function cmdAsk(): Promise<void> {
+  const c = pickFolder();
+  if (!c) return;
   const q = await vscode.window.showInputBox({
     prompt: "Ask a natural language question about the codebase",
     placeHolder: "e.g. What does the auth module do? Explain checkout flow...",
   });
   if (!q) return;
   withProgress("Cartographer: Querying...", async () => {
-    const answer = await client.ask(q);
+    const answer = await c.ask(q);
     showOutput("Cartographer Answer", answer);
   });
 }
 
 async function cmdSummarize(repoName?: string): Promise<void> {
-  const s = await client.summarize(repoName);
+  const c = pickFolder();
+  if (!c) return;
+  const s = await c.summarize(repoName);
   if (!s) return void showError("No repository indexed");
   entityTree.setRepo(repoName);
   const lines = [
@@ -346,19 +406,23 @@ async function cmdSummarize(repoName?: string): Promise<void> {
 }
 
 async function cmdArchitecture(): Promise<void> {
+  const c = pickFolder();
+  if (!c) return;
   withProgress("Cartographer: Detecting architecture...", async () => {
-    const result = await client.architecture();
+    const result = await c.architecture();
     showOutput("Cartographer Architecture", result);
   });
 }
 
 async function cmdImpact(): Promise<void> {
+  const c = pickFolder();
+  if (!c) return;
   const q = await vscode.window.showInputBox({
     prompt: "Find what depends on this symbol",
     placeHolder: "e.g. User, auth_service, database...",
   });
   if (!q) return;
-  const results = await client.impact(q);
+  const results = await c.impact(q);
   if (results.length === 0) return void vscode.window.showInformationMessage(`No dependents found for "${q}"`);
   const lines = [`Impact analysis for "${q}"`, `Found ${results.length} dependents:`, ""];
   for (const r of results) {
@@ -369,13 +433,15 @@ async function cmdImpact(): Promise<void> {
 }
 
 async function cmdNeighbors(): Promise<void> {
+  const c = pickFolder();
+  if (!c) return;
   const q = await vscode.window.showInputBox({
     prompt: "Show neighbors of a node",
     placeHolder: "Node name or class...",
   });
   if (!q) return;
   const depth = await vscode.window.showInputBox({ prompt: "Traversal depth", value: "2" }) || "2";
-  const results = await client.neighbors(q, parseInt(depth) || 2);
+  const results = await c.neighbors(q, parseInt(depth) || 2);
   if (results.length === 0) return void vscode.window.showInformationMessage(`No neighbors found for "${q}"`);
   const lines = [`Neighbors of "${q}":`, ""];
   for (const r of results) {
@@ -386,11 +452,13 @@ async function cmdNeighbors(): Promise<void> {
 }
 
 async function cmdPath(): Promise<void> {
+  const c = pickFolder();
+  if (!c) return;
   const from = await vscode.window.showInputBox({ prompt: "Start node", placeHolder: "e.g. UserController" });
   if (!from) return;
   const to = await vscode.window.showInputBox({ prompt: "End node", placeHolder: "e.g. Database" });
   if (!to) return;
-  const results = await client.path(from, to);
+  const results = await c.path(from, to);
   if (results.length === 0) return void vscode.window.showInformationMessage("No path found");
   const lines = [`Path from "${from}" to "${to}":`];
   for (const r of results) {
@@ -401,13 +469,15 @@ async function cmdPath(): Promise<void> {
 }
 
 async function cmdSimilar(): Promise<void> {
+  const c = pickFolder();
+  if (!c) return;
   const q = await vscode.window.showInputBox({
     prompt: "Find semantically similar nodes",
     placeHolder: "Target node name...",
   });
   if (!q) return;
   withProgress("Cartographer: Searching similar...", async () => {
-    const results = await client.similar(q);
+    const results = await c.similar(q);
     if (results.length === 0) return void vscode.window.showInformationMessage("No similar nodes found");
     const lines = [`Similar to "${q}":`];
     for (const r of results) {
@@ -418,15 +488,19 @@ async function cmdSimilar(): Promise<void> {
 }
 
 async function cmdEmbed(): Promise<void> {
+  const c = pickFolder();
+  if (!c) return;
   withProgress("Cartographer: Generating embeddings (this may take a while)...", async () => {
-    const result = await client.embed();
+    const result = await c.embed();
     showOutput("Cartographer Embed", result);
   });
 }
 
 async function cmdGitIndex(): Promise<void> {
+  const c = pickFolder();
+  if (!c) return;
   withProgress("Cartographer: Indexing git history...", async () => {
-    const result = await client.gitIndex();
+    const result = await c.gitIndex();
     showOutput("Cartographer Git Index", result);
   });
 }
@@ -456,11 +530,12 @@ async function cmdRefresh(): Promise<void> {
 // ── New commands ─────────────────────────────────────────────────────────
 
 async function cmdWatch(): Promise<void> {
-  const wsRoot = client.projectRoot;
-  if (!wsRoot) return void showError("No workspace folder open");
+  const c = pickFolder();
+  if (!c) return;
+  const wsRoot = c.projectRoot;
   withProgress("Cartographer: Starting file watcher...", async () => {
     vscode.window.showInformationMessage("Cartographer watch started (see output channel)");
-    const result = await client.invokeWatch(wsRoot);
+    const result = await c.invokeWatch(wsRoot);
     const ch = vscode.window.createOutputChannel("Cartographer Watch");
     ch.clear();
     ch.appendLine(result);
@@ -469,21 +544,51 @@ async function cmdWatch(): Promise<void> {
 }
 
 async function cmdContext(): Promise<void> {
+  const c = pickFolder();
+  if (!c) return;
   withProgress("Cartographer: Generating context package...", async () => {
-    const result = await client.getContext();
+    const result = await c.getContext();
     showOutput("Cartographer Context", result);
   });
 }
 
 async function cmdDbInfo(): Promise<void> {
+  const c = pickFolder();
+  if (!c) return;
   try {
-    const info = await client.dbInfo();
+    const info = await c.dbInfo();
     showOutput("Cartographer Database", info);
   } catch (e) {
     showError(`DB info failed: ${e}`);
   }
 }
 
+function cmdGraph(entityType?: string, repoName?: string): void {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) return void showError("No workspace folder open");
+  function showGraph(client: CartographerClient) {
+    createGraphWebview(client, ctx.extensionUri, entityType, repoName);
+  }
+  if (folders.length === 1) {
+    showGraph(clients.get(folders[0].uri.fsPath));
+    return;
+  }
+  const items = folders.map(f => ({
+    label: f.name,
+    description: f.uri.fsPath,
+    folder: f,
+  }));
+  const active = clients.active();
+  const defaultIdx = active ? folders.findIndex(f => active.projectRoot.startsWith(f.uri.fsPath)) : 0;
+  vscode.window.showQuickPick(items, { placeHolder: "Select folder for graph" }
+  ).then(selected => {
+    if (selected) showGraph(clients.get(selected.folder.uri.fsPath));
+  });
+}
+// Re-export ctx for command use
+let ctx: vscode.ExtensionContext;
+export function _setCtx(c: vscode.ExtensionContext): void { ctx = c; }
+
 export function deactivate(): void {
-  client?.stopMcp();
+  clients?.dispose();
 }
