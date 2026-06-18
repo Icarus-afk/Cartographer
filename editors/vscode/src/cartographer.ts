@@ -122,7 +122,8 @@ export class CartographerClient {
     const allArgs = [...parts.slice(1), ...args];
     this.output.appendLine(`$ ${this.bin} ${args.join(" ")}`);
     return new Promise((resolve, reject) => {
-      const child = spawn(parts[0], allArgs, { timeout: 120_000 });
+      const env = { ...process.env, CARTOGRAPHER_DB: this.dbPath() };
+      const child = spawn(parts[0], allArgs, { timeout: 120_000, env });
       let stdout = "";
       let stderr = "";
       child.stdout?.on("data", (chunk: Buffer) => stdout += chunk.toString("utf-8"));
@@ -146,9 +147,8 @@ export class CartographerClient {
     const target = p || this._projectRoot;
     if (!target) throw new Error("No workspace folder open");
     try {
-      const db = this.dbPath();
       const out = await this.mcpOrCli("index", { path: target },
-        () => this.exec(["index", target, "--db", db])
+        () => this.exec(["index", target])
       );
       const files = parseInt(out.match(/Indexed (\d+) files/)?.[1] || "0");
       const dirs = parseInt(out.match(/in (\d+) directories/)?.[1] || "0");
@@ -167,10 +167,9 @@ export class CartographerClient {
     limit ??= cfg.maxResults;
     const repo = repoName || this.repoName();
     try {
-      const db = this.dbPath();
       const out = await this.mcpOrCli("search", { query, node_type: nodeType, limit, repo },
         () => {
-          const a = ["ask", query, "--limit", String(limit), "--db", db];
+          const a = ["ask", query, "--limit", String(limit)];
           if (nodeType) a.push("--type", nodeType);
           return this.exec(a);
         }
@@ -201,9 +200,8 @@ export class CartographerClient {
 
   async ask(query: string): Promise<string> {
     try {
-      const db = this.dbPath();
       return await this.mcpOrCli("ask", { query, repo: this.repoName() },
-        () => this.exec(["query", query, "--db", db])
+        () => this.exec(["query", query])
       );
     } catch { return "Query failed."; }
   }
@@ -211,9 +209,8 @@ export class CartographerClient {
   async summarize(repoName?: string): Promise<Summary | null> {
     try {
       const repo = repoName || this.repoName();
-      const db = this.dbPath();
       const out = await this.mcpOrCli("summarize", { repo },
-        () => this.exec(["summarize", "--repo", repo, "--db", db])
+        () => this.exec(["summarize", "--repo", repo])
       );
       return this.parseSummary(out);
     } catch { return null; }
@@ -246,18 +243,16 @@ export class CartographerClient {
 
   async architecture(): Promise<string> {
     try {
-      const db = this.dbPath();
       return await this.mcpOrCli("architecture", { detect: true, repo: this.repoName() },
-        () => this.exec(["architecture", "--detect", "--db", db])
+        () => this.exec(["architecture", "--detect"])
       );
     } catch { return "Architecture detection failed."; }
   }
 
   async impact(target: string): Promise<ImpactResult[]> {
     try {
-      const db = this.dbPath();
       const out = await this.mcpOrCli("impact", { target },
-        () => this.exec(["impact", target, "--db", db])
+        () => this.exec(["impact", target])
       );
       const results: ImpactResult[] = [];
       for (const l of out.split("\n")) {
@@ -270,9 +265,8 @@ export class CartographerClient {
 
   async neighbors(name: string, depth = 2): Promise<NeighborResult[]> {
     try {
-      const db = this.dbPath();
       const out = await this.mcpOrCli("neighbors", { name, depth },
-        () => this.exec(["neighbors", name, "-d", String(depth), "--db", db])
+        () => this.exec(["neighbors", name, "-d", String(depth)])
       );
       const results: NeighborResult[] = [];
       for (const l of out.split("\n")) {
@@ -285,9 +279,8 @@ export class CartographerClient {
 
   async path(from: string, to: string): Promise<PathResult[]> {
     try {
-      const db = this.dbPath();
       const out = await this.mcpOrCli("path", { from_name: from, to_name: to },
-        () => this.exec(["path", from, to, "--db", db])
+        () => this.exec(["path", from, to])
       );
       const results: PathResult[] = [];
       for (const l of out.split("\n")) {
@@ -301,9 +294,8 @@ export class CartographerClient {
   async similar(target: string): Promise<SearchResult[]> {
     const limit = this.projectCfg().maxResults;
     try {
-      const db = this.dbPath();
       const out = await this.mcpOrCli("similar", { target, limit },
-        () => this.exec(["similar", target, "-l", String(limit), "--db", db])
+        () => this.exec(["similar", target, "-l", String(limit)])
       );
       const results: SearchResult[] = [];
       for (const l of out.split("\n")) {
@@ -316,14 +308,13 @@ export class CartographerClient {
 
   async embed(): Promise<string> {
     try {
-      const db = this.dbPath();
-      return await this.exec(["embed", "--db", db]);
+      return await this.exec(["embed"]);
     } catch { return "Embedding failed."; }
   }
 
   async gitIndex(): Promise<string> {
     try {
-      return await this.exec(["git", "index", "--repo-path", this._projectRoot, "--db", this.dbPath()]);
+      return await this.exec(["git", "index", "--repo-path", this._projectRoot]);
     } catch { return "Git index failed."; }
   }
 
@@ -368,9 +359,8 @@ export class CartographerClient {
   ): Promise<GraphData> {
     const repo = repoOverride || this.repoName();
     try {
-      const db = this.dbPath();
       const mcpArgs: Record<string, unknown> = { repo, limit };
-      const cliArgs = ["graph-data", "-l", String(limit), "--db", db, "--repo", repo];
+      const cliArgs = ["graph-data", "-l", String(limit), "--repo", repo];
       if (offset > 0) { mcpArgs.offset = offset; cliArgs.push("--offset", String(offset)); }
       if (dir) { mcpArgs.dir = dir; cliArgs.push("--dir", dir); }
       if (expandNodeId !== undefined) { mcpArgs.expand_node_id = expandNodeId; cliArgs.push("--expand-node-id", String(expandNodeId)); }
@@ -386,18 +376,16 @@ export class CartographerClient {
 
   async updateFile(filePath: string): Promise<string> {
     try {
-      const db = this.dbPath();
       return await this.mcpOrCli("update_index", { file_path: filePath },
-        () => this.exec(["update-index", filePath, "--db", db])
+        () => this.exec(["update-index", filePath])
       );
     } catch { return '{"error":"update_file_failed"}'; }
   }
 
   async deleteFile(filePath: string): Promise<string> {
     try {
-      const db = this.dbPath();
       return await this.mcpOrCli("delete_file", { file_path: filePath },
-        () => this.exec(["delete-file", filePath, "--db", db])
+        () => this.exec(["delete-file", filePath])
       );
     } catch { return '{"error":"delete_file_failed"}'; }
   }
@@ -405,7 +393,7 @@ export class CartographerClient {
   async invokeWatch(root?: string): Promise<string> {
     const target = root || this._projectRoot;
     try {
-      return await this.exec(["watch", target, "--db", this.dbPath()]);
+      return await this.exec(["watch", target]);
     } catch (e) {
       return `Watch failed: ${e}`;
     }
@@ -413,8 +401,7 @@ export class CartographerClient {
 
   async getContext(topN = 10, maxTokens = 1500): Promise<string> {
     try {
-      const db = this.dbPath();
-      return await this.exec(["context", "--top-n", String(topN), "--max-tokens", String(maxTokens), "--db", db]);
+      return await this.exec(["context", "--top-n", String(topN), "--max-tokens", String(maxTokens)]);
     } catch { return "Context generation failed."; }
   }
 
