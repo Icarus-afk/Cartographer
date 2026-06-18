@@ -237,10 +237,20 @@ def update_index(
     from cartographer.storage.connection import get_connection, init_schema
     conn = get_connection(db_path)
     init_schema(conn)
+    root_str = str(root)
     repo_row = conn.execute(
-        "SELECT id, path FROM repositories WHERE path = ?",
-        (str(root.parent if root.is_file() else root),),
+        "SELECT id, path FROM repositories WHERE ? = path OR ? LIKE path || '/%'",
+        (root_str, root_str),
     ).fetchone()
+    # If multiple repos match (nested), pick the longest path prefix
+    if not repo_row:
+        rows = conn.execute(
+            "SELECT id, path FROM repositories ORDER BY LENGTH(path) DESC"
+        ).fetchall()
+        for row in rows:
+            if root_str.startswith(row[1] + "/") or root_str == row[1]:
+                repo_row = row
+                break
     conn.close()
 
     if not repo_row:

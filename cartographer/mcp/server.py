@@ -599,6 +599,56 @@ def update_index_tool(
 
 
 @mcp().tool(
+    name="delete_file",
+    description="Remove a deleted file from the graph and re-embed",
+)
+def delete_file_tool(
+    file_path: str,
+    db: str | None = None,
+) -> str:
+    from pathlib import Path as _Path
+    from cartographer.graph.builder import delete_file_from_graph
+    from cartographer.embedding.engine import generate_embeddings
+    from cartographer.storage.connection import get_connection, init_schema
+
+    db_path = _db(db)
+    root = _Path(file_path).resolve()
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    root_str = str(root)
+    repo_row = conn.execute(
+        "SELECT id, path FROM repositories WHERE ? = path OR ? LIKE path || '/%'",
+        (root_str, root_str),
+    ).fetchone()
+    if not repo_row:
+        rows = conn.execute(
+            "SELECT id, path FROM repositories ORDER BY LENGTH(path) DESC"
+        ).fetchall()
+        for row in rows:
+            if root_str.startswith(row[1] + "/") or root_str == row[1]:
+                repo_row = row
+                break
+
+    if not repo_row:
+        conn.close()
+        return json.dumps({"error": "Repository not found for path"})
+
+    repo_id, repo_path = repo_row[0], repo_row[1]
+    rel_path = str(root.relative_to(repo_path))
+    removed = delete_file_from_graph(conn, repo_id, rel_path)
+    conn.commit()
+    conn.close()
+
+    embed_count = 0
+    if removed > 0:
+        new_count, _ = generate_embeddings(db_path)
+        embed_count = new_count
+
+    return json.dumps({"nodes_removed": removed, "embeddings_generated": embed_count})
+
+
+@mcp().tool(
     name="db_info",
     description="Return statistics about the Cartographer database",
 )

@@ -1258,6 +1258,75 @@ def _fmt_size(bytes_: int) -> str:
     return f"{bytes_:.1f}TB"
 
 
+# ── update-index command ─────────────────────────────────────────────────────
+
+
+@main.command()
+@click.argument("file_path", type=click.Path(exists=True))
+@click.pass_context
+def update_index(ctx, file_path):
+    """Incrementally re-index a single file after changes.
+
+    Re-parses the file, updates the graph, and re-embeds changed nodes.
+    """
+    from cartographer.ingestion.engine import update_index as _update_index
+    result = _update_index(file_path, db_path=ctx.obj["db_path"])
+    click.echo(json.dumps(result))
+
+
+# ── delete-file command ─────────────────────────────────────────────────────
+
+
+@main.command()
+@click.argument("file_path", type=click.Path(exists=False))
+@click.pass_context
+def delete_file(ctx, file_path):
+    """Remove a deleted file from the graph and re-embed.
+
+    Deletes all nodes belonging to the file and re-embeds remaining nodes.
+    """
+    from pathlib import Path as _Path
+    from cartographer.graph.builder import delete_file_from_graph
+    from cartographer.embedding.engine import generate_embeddings
+    from cartographer.storage.connection import get_connection, init_schema
+
+    db_path = ctx.obj["db_path"]
+    root = _Path(file_path).resolve()
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    root_str = str(root)
+    repo_row = conn.execute(
+        "SELECT id, path FROM repositories WHERE ? = path OR ? LIKE path || '/%'",
+        (root_str, root_str),
+    ).fetchone()
+    if not repo_row:
+        rows = conn.execute(
+            "SELECT id, path FROM repositories ORDER BY LENGTH(path) DESC"
+        ).fetchall()
+        for row in rows:
+            if root_str.startswith(row[1] + "/") or root_str == row[1]:
+                repo_row = row
+                break
+
+    if not repo_row:
+        click.echo(json.dumps({"error": "Repository not found for path"}))
+        return
+
+    repo_id, repo_path = repo_row[0], repo_row[1]
+    rel_path = str(root.relative_to(repo_path))
+    removed = delete_file_from_graph(conn, repo_id, rel_path)
+    conn.commit()
+    conn.close()
+
+    embed_count = 0
+    if removed > 0:
+        new_count, _ = generate_embeddings(db_path)
+        embed_count = new_count
+
+    click.echo(json.dumps({"nodes_removed": removed, "embeddings_generated": embed_count}))
+
+
 def _get_repo(ctx) -> tuple[str, str] | None:
     from cartographer.storage.connection import get_connection
     conn = get_connection(ctx.obj["db_path"])

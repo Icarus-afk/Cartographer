@@ -144,9 +144,36 @@ export function activate(ctx: vscode.ExtensionContext): void {
     );
   })();
 
-  // File watcher: incremental re-index on save (not full re-index)
+  // File watcher: incremental re-index via update_index/delete_file MCP tools
   let reindexTimer: NodeJS.Timeout | undefined;
-  const changedFiles = new Set<string>();
+  let progressKey: string | undefined;
+  const pendingFiles = new Set<string>();
+  function scheduleReindex() {
+    if (reindexTimer) clearTimeout(reindexTimer);
+    reindexTimer = setTimeout(flushReindex, 2000);
+  }
+  async function flushReindex() {
+    const files = Array.from(pendingFiles);
+    pendingFiles.clear();
+    if (files.length === 0) return;
+    statusBar.text = "$(sync~spin) Cartographer";
+    progressKey = "updating";
+    for (const f of files) {
+      try {
+        if (f.startsWith("+")) {
+          const raw = f.slice(1);
+          await client.updateFile(raw);
+        } else if (f.startsWith("-")) {
+          const raw = f.slice(1);
+          await client.deleteFile(raw);
+        }
+      } catch { /* ignore single file errors */ }
+    }
+    progressKey = undefined;
+    repoTree.refresh();
+    entityTree.refresh();
+    updateStatusBar();
+  }
   ctx.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(async (doc) => {
       if (!wsRoot) return;
@@ -154,24 +181,29 @@ export function activate(ctx: vscode.ExtensionContext): void {
       if (doc.uri.scheme !== "file") return;
       if (!doc.fileName.startsWith(wsRoot)) return;
       if (isIgnored(doc.fileName, wsRoot)) return;
-
-      changedFiles.add(doc.fileName);
-      if (reindexTimer) clearTimeout(reindexTimer);
-      reindexTimer = setTimeout(async () => {
-        const files = Array.from(changedFiles);
-        changedFiles.clear();
-        statusBar.text = "$(sync~spin) Cartographer";
-
-        // Use the CLI watch/update-index for incremental update
-        for (const f of files) {
-          try {
-            await client.index(f);
-          } catch { /* ignore single file errors */ }
-        }
-        repoTree.refresh();
-        entityTree.refresh();
-        updateStatusBar();
-      }, 2000);
+      pendingFiles.add("+" + doc.fileName);
+      scheduleReindex();
+    }),
+    vscode.workspace.onDidDeleteFiles(async (event) => {
+      if (!wsRoot) return;
+      if (!projCfg.autoReindex) return;
+      for (const uri of event.files) {
+        if (!uri.fsPath.startsWith(wsRoot)) continue;
+        if (isIgnored(uri.fsPath, wsRoot)) continue;
+        pendingFiles.add("-" + uri.fsPath);
+      }
+      if (event.files.length > 0) scheduleReindex();
+    }),
+    vscode.workspace.onDidRenameFiles(async (event) => {
+      if (!wsRoot) return;
+      if (!projCfg.autoReindex) return;
+      for (const file of event.files) {
+        if (!file.oldUri.fsPath.startsWith(wsRoot)) continue;
+        if (isIgnored(file.oldUri.fsPath, wsRoot)) continue;
+        pendingFiles.add("-" + file.oldUri.fsPath);
+        pendingFiles.add("+" + file.newUri.fsPath);
+      }
+      if (event.files.length > 0) scheduleReindex();
     }),
   );
 }

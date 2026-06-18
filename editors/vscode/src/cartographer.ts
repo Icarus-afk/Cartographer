@@ -384,6 +384,24 @@ export class CartographerClient {
     }
   }
 
+  async updateFile(filePath: string): Promise<string> {
+    try {
+      const db = this.dbPath();
+      return await this.mcpOrCli("update_index", { file_path: filePath },
+        () => this.exec(["update-index", filePath, "--db", db])
+      );
+    } catch { return '{"error":"update_file_failed"}'; }
+  }
+
+  async deleteFile(filePath: string): Promise<string> {
+    try {
+      const db = this.dbPath();
+      return await this.mcpOrCli("delete_file", { file_path: filePath },
+        () => this.exec(["delete-file", filePath, "--db", db])
+      );
+    } catch { return '{"error":"delete_file_failed"}'; }
+  }
+
   async invokeWatch(root?: string): Promise<string> {
     const target = root || this._projectRoot;
     try {
