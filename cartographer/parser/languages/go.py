@@ -31,6 +31,8 @@ class GoParser(BaseParser):
             return self._extract_type_declaration(node, source, file_path)
         if node.type == "import_declaration":
             return self._extract_import(node, source, file_path)
+        if node.type in ("const_declaration", "var_declaration"):
+            return self._extract_const_or_var(node, source, file_path)
         return None
 
     def _extract_function(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
@@ -88,6 +90,7 @@ class GoParser(BaseParser):
                 loc["file_path"] = file_path
 
                 children: list[ParsedEntity] = []
+                relationships: list[Relationship] = []
                 if type_node and type_node.type == "struct_type":
                     body = type_node.child_by_field_name("body")
                     if body:
@@ -102,13 +105,39 @@ class GoParser(BaseParser):
                                         name=self._node_text(field_name, source),
                                         location=CodeLocation(**floc),
                                     ))
+                elif type_node and type_node.type == "interface_type":
+                    body = type_node.child_by_field_name("body")
+                    if body:
+                        for item in body.children:
+                            if item.type == "type_identifier":
+                                relationships.append(Relationship(
+                                    target_name=self._node_text(item, source),
+                                    relationship_type="INHERITS",
+                                ))
 
                 return ParsedEntity(
                     kind=kind,
                     name=name,
                     location=CodeLocation(**loc),
                     children=children,
+                    relationships=relationships,
                 )
+        return None
+
+    def _extract_const_or_var(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
+        kind = EntityKind.CONSTANT if node.type == "const_declaration" else EntityKind.VARIABLE
+        for child in node.children:
+            if child.type == "const_spec" or child.type == "var_spec":
+                name_node = child.child_by_field_name("name")
+                if name_node:
+                    loc = self._location_from_node(child)
+                    loc["file_path"] = file_path
+                    return ParsedEntity(
+                        kind=kind,
+                        name=self._node_text(name_node, source),
+                        location=CodeLocation(**loc),
+                    )
+                continue
         return None
 
     def _extract_import(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
