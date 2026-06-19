@@ -40,6 +40,8 @@ class PythonParser(BaseParser):
             return self._extract_decorated(node, source, file_path)
         if node_type == "import_statement" or node_type == "import_from_statement":
             return self._extract_import(node, source, file_path)
+        if node_type == "expression_statement":
+            return self._extract_assignment(node, source, file_path)
         if node_type == "module":
             return None
 
@@ -184,6 +186,20 @@ class PythonParser(BaseParser):
             name=f"import:{self._node_text(node, source)}",
             location=CodeLocation(**loc),
         )
+
+    def _extract_assignment(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
+        for child in node.children:
+            if child.type == "assignment":
+                left = child.child_by_field_name("left")
+                if left and left.type == "identifier":
+                    loc = self._location_from_node(child)
+                    loc["file_path"] = file_path
+                    return ParsedEntity(
+                        kind=EntityKind.CONSTANT,
+                        name=self._node_text(left, source),
+                        location=CodeLocation(**loc),
+                    )
+        return None
 
     def _extract_docstring(self, body_node: Node | None, source: bytes) -> str | None:
         if not body_node:
