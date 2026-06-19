@@ -412,11 +412,12 @@ def context(ctx, repo, max_tokens, top_n):
 @click.argument("to_name")
 @click.option("--max-depth", default=5)
 @click.option("--max-tokens", "-m", default=0, type=int, help="Compress output to fit token budget")
+@click.option("--repo", "-r", help="Repository name")
 @click.pass_context
-def path(ctx, from_name, to_name, max_depth, max_tokens):
+def path(ctx, from_name, to_name, max_depth, max_tokens, repo):
     """Find path between two nodes."""
     _ensure_indexed(ctx.obj["db_path"])
-    results = find_path(from_name, to_name, ctx.obj["db_path"], max_depth=max_depth)
+    results = find_path(from_name, to_name, ctx.obj["db_path"], repo_name=repo, max_depth=max_depth)
 
     if not results:
         click.echo("No path found.")
