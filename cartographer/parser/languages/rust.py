@@ -109,10 +109,27 @@ class RustParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+
+        children: list[ParsedEntity] = []
+        body = node.child_by_field_name("body")
+        if body:
+            for child in body.children:
+                if child.type == "enum_variant":
+                    vname = child.child_by_field_name("name")
+                    if vname:
+                        vloc = self._location_from_node(child)
+                        vloc["file_path"] = file_path
+                        children.append(ParsedEntity(
+                            kind=EntityKind.VARIABLE,
+                            name=self._node_text(vname, source),
+                            location=CodeLocation(**vloc),
+                        ))
+
         return ParsedEntity(
             kind=EntityKind.ENUM,
             name=name,
             location=CodeLocation(**loc),
+            children=children,
         )
 
     def _extract_trait(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
@@ -122,10 +139,25 @@ class RustParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+
+        relationships: list[Relationship] = []
+        for child in node.children:
+            if child.type == "type_parameter_bounds":
+                for bound in child.children:
+                    if bound.type == "trait_bound":
+                        trait_path = bound.child_by_field_name("trait")
+                        if trait_path:
+                            rel_name = self._node_text(trait_path, source)
+                            relationships.append(Relationship(
+                                target_name=rel_name,
+                                relationship_type="INHERITS",
+                            ))
+
         return ParsedEntity(
             kind=EntityKind.INTERFACE,
             name=name,
             location=CodeLocation(**loc),
+            relationships=relationships,
         )
 
     def _extract_impl(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
