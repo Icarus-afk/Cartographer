@@ -58,6 +58,16 @@ class CSharpParser(BaseParser):
             location=CodeLocation(**loc), children=children,
         )
 
+    def _extract_base_types(self, node: Node, source: bytes) -> list[str]:
+        base_list = node.child_by_field_name("base_list")
+        if not base_list:
+            return []
+        types: list[str] = []
+        for child in base_list.children:
+            if child.type in ("simple_name", "qualified_name", "generic_name"):
+                types.append(self._node_text(child, source))
+        return types
+
     def _extract_class(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
         name_node = node.child_by_field_name("name")
         if not name_node:
@@ -66,9 +76,12 @@ class CSharpParser(BaseParser):
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
         children = self._extract_members(node, source, file_path)
+        base_types = self._extract_base_types(node, source)
+        relationships = [Relationship(target_name=t, relationship_type="INHERITS") for t in base_types]
         return ParsedEntity(
             kind=EntityKind.CLASS, name=name,
             location=CodeLocation(**loc), children=children,
+            relationships=relationships,
         )
 
     def _extract_interface(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
@@ -78,9 +91,12 @@ class CSharpParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        base_types = self._extract_base_types(node, source)
+        relationships = [Relationship(target_name=t, relationship_type="INHERITS") for t in base_types]
         return ParsedEntity(
             kind=EntityKind.INTERFACE, name=name,
             location=CodeLocation(**loc),
+            relationships=relationships,
         )
 
     def _extract_enum(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

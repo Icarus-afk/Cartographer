@@ -51,6 +51,27 @@ class ScalaParser(BaseParser):
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
 
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
+
+        if kind in (EntityKind.CLASS, EntityKind.INTERFACE):
+            template = None
+            for child in node.children:
+                if child.type == "template":
+                    template = child
+                    break
+            if template:
+                for child in template.children:
+                    if child.type == "template_parents":
+                        for parent in child.children:
+                            if parent.type in ("identifier", "type_identifier", "simple_identifier"):
+                                rel_name = self._node_text(parent, source)
+                                rel_type = "IMPLEMENTS" if kind == EntityKind.CLASS else "INHERITS"
+                                relationships.append(Relationship(
+                                    target_name=rel_name,
+                                    relationship_type=rel_type,
+                                ))
+
         children: list[ParsedEntity] = []
         if kind in (EntityKind.CLASS, EntityKind.INTERFACE):
             body = node.child_by_field_name("body")
@@ -65,8 +86,6 @@ class ScalaParser(BaseParser):
                         if parsed:
                             children.append(parsed)
 
-        relationships: list[Relationship] = []
-        self._extract_calls(node, source, relationships)
         return ParsedEntity(
             kind=kind, name=name,
             location=CodeLocation(**loc), children=children,

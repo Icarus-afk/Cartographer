@@ -33,11 +33,18 @@ class TypeScriptParser(JavaScriptParser):
         tp = node.child_by_field_name("type_parameters")
         if tp:
             meta["type_parameters"] = self._node_text(tp, source)
+
+        relationships: list[Relationship] = []
+        for child in node.children:
+            if child.type == "extends_type_clause":
+                self._add_inherits(child, source, relationships)
+
         return ParsedEntity(
             kind=EntityKind.INTERFACE,
             name=name,
             location=CodeLocation(**loc),
             metadata=meta,
+            relationships=relationships,
         )
 
     def _extract_type_alias(
@@ -74,6 +81,23 @@ class TypeScriptParser(JavaScriptParser):
             name=name,
             location=CodeLocation(**loc),
         )
+
+    def _extract_class(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
+        entity = super()._extract_class(node, source, file_path)
+        if entity:
+            for child in node.children:
+                if child.type == "class_heritage":
+                    self._add_inherits(child, source, entity.relationships)
+        return entity
+
+    def _add_inherits(self, node: Node, source: bytes, rels: list[Relationship]) -> None:
+        if node.type in ("type_identifier", "identifier"):
+            rels.append(Relationship(
+                target_name=self._node_text(node, source),
+                relationship_type="INHERITS",
+            ))
+        for child in node.children:
+            self._add_inherits(child, source, rels)
 
     def _extract_function(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
         name_node = node.child_by_field_name("name")

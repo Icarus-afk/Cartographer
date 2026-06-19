@@ -67,15 +67,24 @@ class ElixirParser(BaseParser):
                     children.append(parsed)
 
         kind = EntityKind.MODULE
+        relationships: list[Relationship] = []
         if call_name == "defprotocol":
             kind = EntityKind.INTERFACE
         elif call_name == "defimpl":
             name = f"{name} (impl)"
             kind = EntityKind.CLASS
+            if args_node and len(args_node.children) >= 2:
+                protocol_node = args_node.children[0]
+                rel_name = self._node_text(protocol_node, source)
+                relationships.append(Relationship(
+                    target_name=rel_name,
+                    relationship_type="IMPLEMENTS",
+                ))
 
         return ParsedEntity(
             kind=kind, name=name,
             location=CodeLocation(**loc), children=children,
+            relationships=relationships,
         )
 
     def _extract_function(

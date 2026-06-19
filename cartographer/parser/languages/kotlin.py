@@ -50,6 +50,18 @@ class KotlinParser(BaseParser):
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
 
+        relationships: list[Relationship] = []
+        for child in node.children:
+            if child.type == "delegation_specification":
+                type_ref = child.child_by_field_name("type")
+                if type_ref:
+                    rel_name = self._node_text(type_ref, source)
+                    rel_type = "IMPLEMENTS" if kind == EntityKind.CLASS else "INHERITS"
+                    relationships.append(Relationship(
+                        target_name=rel_name,
+                        relationship_type=rel_type,
+                    ))
+
         body = node.child_by_field_name("body")
         children: list[ParsedEntity] = []
         if body:
@@ -66,6 +78,7 @@ class KotlinParser(BaseParser):
         return ParsedEntity(
             kind=kind, name=name,
             location=CodeLocation(**loc), children=children,
+            relationships=relationships,
         )
 
     def _extract_object(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

@@ -39,6 +39,19 @@ class SwiftParser(BaseParser):
             return self._extract_variable(node, source, file_path)
         return None
 
+    def _extract_inheritance(self, node: Node, source: bytes) -> list[Relationship]:
+        clause = node.child_by_field_name("inheritance_clause")
+        if not clause:
+            return []
+        rels: list[Relationship] = []
+        for child in clause.children:
+            if child.type in ("type_identifier", "member_type_identifier", "identifier"):
+                rels.append(Relationship(
+                    target_name=self._node_text(child, source),
+                    relationship_type="INHERITS",
+                ))
+        return rels
+
     def _extract_class(
         self, node: Node, source: bytes, file_path: str, kind: EntityKind
     ) -> ParsedEntity | None:
@@ -66,6 +79,7 @@ class SwiftParser(BaseParser):
         return ParsedEntity(
             kind=kind, name=name,
             location=CodeLocation(**loc), children=children,
+            relationships=self._extract_inheritance(node, source),
         )
 
     def _extract_protocol(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
@@ -78,6 +92,7 @@ class SwiftParser(BaseParser):
         return ParsedEntity(
             kind=EntityKind.INTERFACE, name=name,
             location=CodeLocation(**loc),
+            relationships=self._extract_inheritance(node, source),
         )
 
     def _extract_extension(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
