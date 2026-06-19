@@ -44,10 +44,13 @@ class JavaScriptParser(BaseParser):
         name = self._node_text(name_node, source) if name_node else "anonymous"
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
         return ParsedEntity(
             kind=EntityKind.FUNCTION,
             name=name,
             location=CodeLocation(**loc),
+            relationships=relationships,
         )
 
     def _extract_class(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
@@ -91,10 +94,13 @@ class JavaScriptParser(BaseParser):
             name = self._node_text(name_node, source)
             loc = self._location_from_node(node)
             loc["file_path"] = file_path
+            relationships: list[Relationship] = []
+            self._extract_calls(node, source, relationships)
             return ParsedEntity(
                 kind=EntityKind.METHOD,
                 name=name,
                 location=CodeLocation(**loc),
+                relationships=relationships,
             )
         return None
 
@@ -103,10 +109,13 @@ class JavaScriptParser(BaseParser):
     ) -> ParsedEntity | None:
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
         return ParsedEntity(
             kind=EntityKind.FUNCTION,
             name="<anonymous>",
             location=CodeLocation(**loc),
+            relationships=relationships,
         )
 
     def _extract_variable_declaration(

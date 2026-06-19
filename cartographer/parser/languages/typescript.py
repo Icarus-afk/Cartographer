@@ -3,7 +3,7 @@ from __future__ import annotations
 import tree_sitter_typescript
 from tree_sitter import Language, Node
 
-from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity
+from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity, Relationship
 from cartographer.parser.languages.javascript import JavaScriptParser
 
 
@@ -84,9 +84,12 @@ class TypeScriptParser(JavaScriptParser):
         tp = node.child_by_field_name("type_parameters")
         if tp:
             meta["type_parameters"] = self._node_text(tp, source)
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
         return ParsedEntity(
             kind=EntityKind.FUNCTION,
             name=name,
             location=CodeLocation(**loc),
             metadata=meta,
+            relationships=relationships,
         )

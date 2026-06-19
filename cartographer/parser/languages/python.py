@@ -18,6 +18,7 @@ class PythonParser(BaseParser):
 
     def extract_entities(self, source: bytes, file_path: str) -> list[ParsedEntity]:
         entities: list[ParsedEntity] = []
+        self._extra_entities: list[ParsedEntity] = []
         root = self._parser.parse(source).root_node
 
         for child in root.children:
@@ -25,6 +26,7 @@ class PythonParser(BaseParser):
             if entity:
                 entities.append(entity)
 
+        entities.extend(self._extra_entities)
         return entities
 
     def _parse_node(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
@@ -146,9 +148,31 @@ class PythonParser(BaseParser):
         )
 
     def _extract_decorated(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
+        dec_names: list[str] = []
+        for child in node.children:
+            if child.type == "decorator":
+                dec_text = self._node_text(child, source).lstrip("@")
+                dec_name = dec_text.split("(")[0].split(".")[-1].strip()
+                if dec_name:
+                    dec_loc = self._location_from_node(child)
+                    dec_loc["file_path"] = file_path
+                    self._extra_entities.append(ParsedEntity(
+                        kind=EntityKind.CONSTANT,
+                        name=f"@{dec_name}",
+                        location=CodeLocation(**dec_loc),
+                    ))
+                    dec_names.append(f"@{dec_name}")
+
         for child in node.children:
             if child.type in ("function_definition", "class_definition"):
-                return self._parse_node(child, source, file_path)
+                inner = self._parse_node(child, source, file_path)
+                if inner:
+                    for dn in dec_names:
+                        inner.relationships.append(Relationship(
+                            target_name=dn,
+                            relationship_type="DECORATES",
+                        ))
+                return inner
         return None
 
     def _extract_import(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

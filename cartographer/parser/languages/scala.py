@@ -3,7 +3,7 @@ from __future__ import annotations
 import tree_sitter_scala
 from tree_sitter import Language, Node
 
-from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity
+from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity, Relationship
 from cartographer.parser.base import BaseParser
 
 
@@ -65,9 +65,12 @@ class ScalaParser(BaseParser):
                         if parsed:
                             children.append(parsed)
 
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
         return ParsedEntity(
             kind=kind, name=name,
             location=CodeLocation(**loc), children=children,
+            relationships=relationships,
         )
 
     def _extract_val(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

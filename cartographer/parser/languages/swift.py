@@ -3,7 +3,7 @@ from __future__ import annotations
 import tree_sitter_swift
 from tree_sitter import Language, Node
 
-from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity
+from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity, Relationship
 from cartographer.parser.base import BaseParser
 
 
@@ -110,9 +110,12 @@ class SwiftParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
         return ParsedEntity(
             kind=EntityKind.FUNCTION, name=name,
             location=CodeLocation(**loc),
+            relationships=relationships,
         )
 
     def _extract_variable(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

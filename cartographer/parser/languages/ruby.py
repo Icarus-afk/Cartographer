@@ -3,7 +3,7 @@ from __future__ import annotations
 import tree_sitter_ruby
 from tree_sitter import Language, Node
 
-from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity
+from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity, Relationship
 from cartographer.parser.base import BaseParser
 
 
@@ -98,9 +98,12 @@ class RubyParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
         return ParsedEntity(
             kind=kind, name=name,
             location=CodeLocation(**loc),
+            relationships=relationships,
         )
 
     def _extract_singleton_method(
@@ -112,7 +115,10 @@ class RubyParser(BaseParser):
         name = "self." + self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
         return ParsedEntity(
             kind=EntityKind.METHOD, name=name,
             location=CodeLocation(**loc),
+            relationships=relationships,
         )

@@ -149,9 +149,14 @@ class JavaParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
+
         return ParsedEntity(
             kind=EntityKind.METHOD, name=name,
             location=CodeLocation(**loc),
+            relationships=relationships,
         )
 
     def _extract_field(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

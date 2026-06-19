@@ -3,7 +3,7 @@ from __future__ import annotations
 import tree_sitter_zig
 from tree_sitter import Language, Node
 
-from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity
+from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity, Relationship
 from cartographer.parser.base import BaseParser
 
 
@@ -36,9 +36,12 @@ class ZigParser(BaseParser):
         if node.type == "test_declaration":
             loc = self._location_from_node(node)
             loc["file_path"] = file_path
+            relationships: list[Relationship] = []
+            self._extract_calls(node, source, relationships)
             return ParsedEntity(
                 kind=EntityKind.FUNCTION, name="<test>",
                 location=CodeLocation(**loc),
+                relationships=relationships,
             )
         # containers inside containers (pub const, etc)
         if node.type in ("container_member", "declaration_member"):
@@ -55,9 +58,14 @@ class ZigParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
+
         return ParsedEntity(
             kind=EntityKind.FUNCTION, name=name,
             location=CodeLocation(**loc),
+            relationships=relationships,
         )
 
     def _extract_container(

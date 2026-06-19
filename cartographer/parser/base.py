@@ -6,7 +6,7 @@ from pathlib import Path
 from tree_sitter import Language, Node, Parser
 
 from cartographer.core.models import Language as ProgLang
-from cartographer.core.models import ParsedEntity
+from cartographer.core.models import ParsedEntity, Relationship
 
 
 def _count_error_nodes(node: Node) -> tuple[int, int]:
@@ -62,6 +62,20 @@ class BaseParser(ABC):
 
     @abstractmethod
     def extract_entities(self, source: bytes, file_path: str) -> list[ParsedEntity]: ...
+
+    def _extract_calls(self, node: Node, source: bytes, relationships: list[Relationship]) -> None:
+        call_types = {"call", "call_expression", "method_invocation"}
+        if node.type in call_types:
+            func = node.child_by_field_name("function") or node.child_by_field_name("name")
+            if func:
+                name = self._node_text(func, source)
+                if "." not in name and " " not in name and "(" not in name:
+                    relationships.append(Relationship(
+                        target_name=name,
+                        relationship_type="CALLS",
+                    ))
+        for child in node.children:
+            self._extract_calls(child, source, relationships)
 
     def _node_text(self, node: Node, source: bytes) -> str:
         return source[node.start_byte : node.end_byte].decode("utf-8")

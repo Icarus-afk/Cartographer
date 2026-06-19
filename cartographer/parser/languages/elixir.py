@@ -3,7 +3,7 @@ from __future__ import annotations
 import tree_sitter_elixir
 from tree_sitter import Language, Node
 
-from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity
+from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity, Relationship
 from cartographer.parser.base import BaseParser
 
 _CALL_KEYWORDS = frozenset({
@@ -104,7 +104,11 @@ class ElixirParser(BaseParser):
                 if parsed:
                     children.append(parsed)
 
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
+
         return ParsedEntity(
             kind=EntityKind.FUNCTION, name=name,
             location=CodeLocation(**loc), children=children,
+            relationships=relationships,
         )

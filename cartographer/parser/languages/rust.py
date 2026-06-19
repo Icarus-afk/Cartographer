@@ -61,11 +61,15 @@ class RustParser(BaseParser):
             if ret:
                 return_type = self._node_text(ret, source)
 
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
+
         return ParsedEntity(
             kind=EntityKind.FUNCTION,
             name=name,
             location=CodeLocation(**loc),
             metadata={"public": pub, "return_type": return_type},
+            relationships=relationships,
         )
 
     def _extract_struct(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

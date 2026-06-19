@@ -268,12 +268,13 @@ def _resolve_entity_relationships(
     for entity in entities:
         for rel in entity.relationships:
             targets = name_to_entity_ids.get(rel.target_name, [])
-            if len(targets) == 1:
-                tgt_id = targets[0]
-                src_id = name_to_entity_ids.get(entity.name, [])
-                if src_id and src_id[0] != tgt_id:
-                    batch_edge(src_id[0], tgt_id, rel.relationship_type)
-                    stats["edges"] += 1
+            if not targets:
+                continue
+            src_ids = name_to_entity_ids.get(entity.name, [])
+            tgt_id = targets[0]
+            if src_ids and src_ids[0] != tgt_id:
+                batch_edge(src_ids[0], tgt_id, rel.relationship_type)
+                stats["edges"] += 1
         for child in entity.children:
             _resolve_entity_relationships(
                 [child], name_to_entity_ids, stats, batch_edge,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import tree_sitter_php
 from tree_sitter import Language, Node
 
-from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity
+from cartographer.core.models import CodeLocation, EntityKind, ParsedEntity, Relationship
 from cartographer.parser.base import BaseParser
 
 
@@ -95,9 +95,12 @@ class PHPPhpParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        relationships: list[Relationship] = []
+        self._extract_calls(node, source, relationships)
         return ParsedEntity(
             kind=EntityKind.FUNCTION, name=name,
             location=CodeLocation(**loc),
+            relationships=relationships,
         )
 
     def _extract_body(self, node: Node, source: bytes, file_path: str) -> list[ParsedEntity]:
@@ -113,8 +116,11 @@ class PHPPhpParser(BaseParser):
                 name = self._node_text(name_node, source)
                 mloc = self._location_from_node(child)
                 mloc["file_path"] = file_path
+                mrelationships: list[Relationship] = []
+                self._extract_calls(child, source, mrelationships)
                 children.append(ParsedEntity(
                     kind=EntityKind.METHOD, name=name,
                     location=CodeLocation(**mloc),
+                    relationships=mrelationships,
                 ))
         return children
