@@ -915,7 +915,7 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
                 {base_where}
                 ORDER BY (SELECT COUNT(*) FROM edges e
                           WHERE e.repository_id = ?
-                          AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC, RANDOM()
+                          AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC, n.id
                 LIMIT ? OFFSET ?""",
             (*base_params, repo_id, hub_count, offset),
         ).fetchall()
@@ -929,6 +929,7 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
                     WHERE n.repository_id = ?
                     AND (e.source_node_id IN ({seed_ph}) OR e.target_node_id IN ({seed_ph}))
                     AND n.id NOT IN ({seed_ph})
+                    ORDER BY n.id
                     LIMIT ?""",
                 (repo_id, *[s[0] for s in seeds], *[s[0] for s in seeds], *[s[0] for s in seeds], limit - len(all_ids)),
             ).fetchall()
@@ -943,7 +944,7 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
                     {base_where} AND n.id NOT IN ({ph})
                     ORDER BY (SELECT COUNT(*) FROM edges e
                               WHERE e.repository_id = ?
-                              AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC
+                              AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC, n.id
                     LIMIT ?""",
                 (*base_params, *all_ids, repo_id, limit - len(all_ids)),
             ).fetchall()
@@ -959,7 +960,7 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
 
     ph = ",".join("?" for _ in final_ids)
     nodes_list = conn.execute(
-        f"SELECT id, name, node_type, file_path FROM nodes WHERE id IN ({ph})",
+        f"SELECT id, name, node_type, file_path FROM nodes WHERE id IN ({ph}) ORDER BY id",
         (*final_ids,),
     ).fetchall()
 
@@ -967,7 +968,8 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
         f"""SELECT source_node_id, target_node_id, edge_type FROM edges
             WHERE repository_id = ?
             AND source_node_id IN ({ph})
-            AND target_node_id IN ({ph})""",
+            AND target_node_id IN ({ph})
+            ORDER BY source_node_id, target_node_id""",
         (repo_id, *final_ids, *final_ids),
     ).fetchall()
 
