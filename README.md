@@ -14,7 +14,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Icarus-afk/Cartographer/actions"><img src="https://github.com/Icarus-afk/Cartographer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/Icarus-afk/Cartographer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/version-0.1.0-green.svg" alt="Version 0.1.0">
