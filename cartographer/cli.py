@@ -903,21 +903,26 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
             if r[0] not in all_ids and len(all_ids) < limit:
                 all_ids.append(r[0])
     else:
-        base_where = "WHERE n.repository_id = ?"
-        base_params: list = [repo_id]
+        dir_clause = ""
+        dir_params: list = []
         if dir_filter:
-            base_where += " AND n.file_path LIKE ?"
-            base_params.append(dir_filter + "%")
+            dir_clause = "AND n.file_path LIKE ?"
+            dir_params.append(dir_filter + "%")
 
         hub_count = max(5, limit // 8)
         seeds = conn.execute(
-            f"""SELECT n.id FROM nodes n
-                {base_where}
-                ORDER BY (SELECT COUNT(*) FROM edges e
-                          WHERE e.repository_id = ?
-                          AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC, n.id
+            f"""WITH degree AS (
+                    SELECT n.id as nid, COUNT(e.rowid) as deg
+                    FROM nodes n
+                    LEFT JOIN edges e ON e.repository_id = n.repository_id
+                        AND (e.source_node_id = n.id OR e.target_node_id = n.id)
+                    WHERE n.repository_id = ? {dir_clause}
+                    GROUP BY n.id
+                )
+                SELECT nid FROM degree
+                ORDER BY deg DESC, nid
                 LIMIT ? OFFSET ?""",
-            (*base_params, repo_id, hub_count, offset),
+            (repo_id, *dir_params, hub_count, offset),
         ).fetchall()
 
         all_ids = [s[0] for s in seeds]
@@ -940,13 +945,19 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
         if all_ids and len(all_ids) < limit:
             ph = ",".join("?" for _ in all_ids)
             remaining = conn.execute(
-                f"""SELECT n.id FROM nodes n
-                    {base_where} AND n.id NOT IN ({ph})
-                    ORDER BY (SELECT COUNT(*) FROM edges e
-                              WHERE e.repository_id = ?
-                              AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC, n.id
+                f"""WITH degree AS (
+                        SELECT n.id as nid, COUNT(e.rowid) as deg
+                        FROM nodes n
+                        LEFT JOIN edges e ON e.repository_id = n.repository_id
+                            AND (e.source_node_id = n.id OR e.target_node_id = n.id)
+                        WHERE n.repository_id = ? {dir_clause}
+                            AND n.id NOT IN ({ph})
+                        GROUP BY n.id
+                    )
+                    SELECT nid FROM degree
+                    ORDER BY deg DESC, nid
                     LIMIT ?""",
-                (*base_params, *all_ids, repo_id, limit - len(all_ids)),
+                (repo_id, *dir_params, *all_ids, limit - len(all_ids)),
             ).fetchall()
             for r in remaining:
                 all_ids.append(r[0])
@@ -981,14 +992,18 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
     ).fetchone()[0]
 
     dir_rows = conn.execute(
-        "SELECT file_path FROM nodes WHERE repository_id = ?"
-        " AND node_type != 'directory' AND file_path IS NOT NULL",
+        """SELECT
+            CASE WHEN INSTR(SUBSTR(file_path, 1, LENGTH(file_path) - 1), '/') > 0
+                 THEN SUBSTR(file_path, 1, LENGTH(file_path) - 1 -
+                      INSTR(SUBSTR(file_path, 1, LENGTH(file_path) - 1), '/'))
+                 ELSE '/' END as dir,
+            COUNT(*) as cnt
+        FROM nodes
+        WHERE repository_id = ? AND node_type != 'directory' AND file_path IS NOT NULL
+        GROUP BY dir
+        ORDER BY cnt DESC""",
         (repo_id,),
     ).fetchall()
-    dir_counts: dict[str, int] = {}
-    for (fp,) in dir_rows:
-        d = fp.rsplit("/", 1)[0] if "/" in fp else "/"
-        dir_counts[d] = dir_counts.get(d, 0) + 1
 
     conn.close()
     click.echo(json.dumps({
@@ -997,8 +1012,7 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
         "node_types": type_counts,
         "nodes": [{"id": n[0], "name": n[1], "type": n[2], "file_path": n[3]} for n in nodes_list],
         "edges": [{"source": e[0], "target": e[1], "type": e[2]} for e in edges],
-        "directories": [{"path": p, "count": c}
-                for p, c in sorted(dir_counts.items(), key=lambda x: -x[1])],
+        "directories": [{"path": r[0], "count": r[1]} for r in dir_rows],
     }))
 
 

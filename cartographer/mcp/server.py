@@ -418,17 +418,21 @@ def graph_data(
         "SELECT COUNT(*) FROM edges WHERE repository_id = ?", (repo_id,)
     ).fetchone()[0]
 
-    # Collect directory stats (compute in Python for portability)
+    # Collect directory stats via SQL GROUP BY (efficient for large repos)
     dir_rows = conn.execute(
-        "SELECT file_path FROM nodes WHERE repository_id = ?"
-        " AND node_type != 'directory' AND file_path IS NOT NULL",
+        """SELECT
+            CASE WHEN INSTR(SUBSTR(file_path, 1, LENGTH(file_path) - 1), '/') > 0
+                 THEN SUBSTR(file_path, 1, LENGTH(file_path) - 1 -
+                      INSTR(SUBSTR(file_path, 1, LENGTH(file_path) - 1), '/'))
+                 ELSE '/' END as dir,
+            COUNT(*) as cnt
+        FROM nodes
+        WHERE repository_id = ? AND node_type != 'directory' AND file_path IS NOT NULL
+        GROUP BY dir
+        ORDER BY cnt DESC""",
         (repo_id,),
     ).fetchall()
-    dir_counts: dict[str, int] = {}
-    for (fp,) in dir_rows:
-        d = fp.rsplit("/", 1)[0] if "/" in fp else "/"
-        dir_counts[d] = dir_counts.get(d, 0) + 1
-    dirs = sorted(dir_counts.items(), key=lambda x: -x[1])
+    dirs = [(r[0], r[1]) for r in dir_rows]
 
     conn.close()
     return _json.dumps({
@@ -466,24 +470,33 @@ def _graph_hub_nodes(
     conn: sqlite3.Connection, repo_id: int, limit: int, offset: int,
     dir_filter: str | None,
 ) -> list[int]:
-    """Select high-degree hub nodes + neighbors, with pagination + dir filter."""
-    base_where = "WHERE n.repository_id = ?"
-    base_params: list = [repo_id]
+    """Select high-degree hub nodes + neighbors, with pagination + dir filter.
 
+    Uses a pre-aggregated degree CTE for O(n+m) performance instead of
+    O(n*m) correlated subqueries.
+    """
+    dir_clause = ""
+    dir_params: list = []
     if dir_filter:
-        base_where += " AND n.file_path LIKE ?"
-        base_params.append(dir_filter + "%")
+        dir_clause = "AND n.file_path LIKE ?"
+        dir_params.append(dir_filter + "%")
 
-    # Pick hubs (skipping offset), then add their neighbors
+    # Pre-compute degree for all nodes in this repo via a single JOIN
+    # degree CTE: node_id -> number of connected edges
     hub_count = max(5, limit // 8)
     seeds = conn.execute(
-        f"""SELECT n.id FROM nodes n
-            {base_where}
-            ORDER BY (SELECT COUNT(*) FROM edges e
-                      WHERE e.repository_id = ?
-                      AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC, n.id
+        f"""WITH degree AS (
+                SELECT n.id as nid, COUNT(e.rowid) as deg
+                FROM nodes n
+                LEFT JOIN edges e ON e.repository_id = n.repository_id
+                    AND (e.source_node_id = n.id OR e.target_node_id = n.id)
+                WHERE n.repository_id = ? {dir_clause}
+                GROUP BY n.id
+            )
+            SELECT nid FROM degree
+            ORDER BY deg DESC, nid
             LIMIT ? OFFSET ?""",
-        (*base_params, repo_id, hub_count, offset),
+        (repo_id, *dir_params, hub_count, offset),
     ).fetchall()
 
     all_ids: list[int] = [s[0] for s in seeds]
@@ -503,17 +516,23 @@ def _graph_hub_nodes(
             if r[0] not in all_ids and len(all_ids) < limit:
                 all_ids.append(r[0])
 
-    # If still room, add next highest-degree nodes
+    # If still room, add next highest-degree nodes using the same CTE approach
     if all_ids and len(all_ids) < limit:
         ph = ",".join("?" for _ in all_ids)
         remaining = conn.execute(
-            f"""SELECT n.id FROM nodes n
-                {base_where} AND n.id NOT IN ({ph})
-                ORDER BY (SELECT COUNT(*) FROM edges e
-                          WHERE e.repository_id = ?
-                          AND (e.source_node_id = n.id OR e.target_node_id = n.id)) DESC, n.id
+            f"""WITH degree AS (
+                    SELECT n.id as nid, COUNT(e.rowid) as deg
+                    FROM nodes n
+                    LEFT JOIN edges e ON e.repository_id = n.repository_id
+                        AND (e.source_node_id = n.id OR e.target_node_id = n.id)
+                    WHERE n.repository_id = ? {dir_clause}
+                        AND n.id NOT IN ({ph})
+                    GROUP BY n.id
+                )
+                SELECT nid FROM degree
+                ORDER BY deg DESC, nid
                 LIMIT ?""",
-            (*base_params, *all_ids, repo_id, limit - len(all_ids)),
+            (repo_id, *dir_params, *all_ids, limit - len(all_ids)),
         ).fetchall()
         for r in remaining:
             all_ids.append(r[0])
