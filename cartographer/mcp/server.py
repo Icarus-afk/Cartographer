@@ -699,6 +699,153 @@ def db_info_tool(
     })
 
 
+@mcp().tool(
+    name="file_summary",
+    description="Compressed file summary for agents — replaces reading the full file. Returns entities, imports, exports, and relationships in ~200 tokens instead of ~2000.",
+)
+def file_summary_tool(
+    file_path: str,
+    repo: str | None = None,
+    db: str | None = None,
+) -> str:
+    import os as _os
+    conn = _get_conn(db)
+
+    # Find repo
+    if repo:
+        repo_row = conn.execute(
+            "SELECT id, path FROM repositories WHERE name = ?", (repo,)
+        ).fetchone()
+    else:
+        repo_row = conn.execute(
+            "SELECT id, path FROM repositories ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    if not repo_row:
+        conn.close()
+        return json.dumps({"error": "No repository found"})
+
+    repo_id, repo_path = repo_row[0], repo_row[1]
+
+    # Resolve file path — try absolute, then relative to repo
+    fpath = file_path
+    row = conn.execute(
+        "SELECT id, name, node_type, metadata_json FROM nodes WHERE repository_id = ? AND file_path = ? AND node_type = 'file'",
+        (repo_id, fpath),
+    ).fetchone()
+
+    if not row:
+        # Try basename match
+        basename = _os.path.basename(fpath)
+        row = conn.execute(
+            "SELECT id, name, node_type, metadata_json FROM nodes WHERE repository_id = ? AND name = ? AND node_type = 'file' AND node_type = 'file' LIMIT 1",
+            (repo_id, basename),
+        ).fetchone()
+
+    if not row:
+        conn.close()
+        return json.dumps({"error": f"File not found in graph: {file_path}"})
+
+    file_node_id = row[0]
+    file_name = row[1]
+
+    # All entities in this file
+    entities = conn.execute(
+        """SELECT n.name, n.node_type, n.metadata_json
+           FROM nodes n
+           JOIN edges e ON e.source_node_id = ?
+           WHERE e.repository_id = ? AND e.target_node_id = n.id
+           AND e.edge_type IN ('DEFINES', 'DECLARES')
+           ORDER BY n.node_type, n.name""",
+        (file_node_id, repo_id),
+    ).fetchall()
+
+    # Outgoing imports
+    imports = conn.execute(
+        """SELECT t.name, t.file_path FROM edges e
+           JOIN nodes t ON e.target_node_id = t.id
+           WHERE e.repository_id = ? AND e.source_node_id = ? AND e.edge_type = 'IMPORTS'""",
+        (repo_id, file_node_id),
+    ).fetchall()
+
+    # Incoming dependents (who imports this file)
+    dependents = conn.execute(
+        """SELECT s.name, s.file_path FROM edges e
+           JOIN nodes s ON e.source_node_id = s.id
+           WHERE e.repository_id = ? AND e.target_node_id = ? AND e.edge_type = 'IMPORTS'""",
+        (repo_id, file_node_id),
+    ).fetchall()
+
+    # Internal relationships
+    calls = conn.execute(
+        """SELECT s.name, t.name FROM edges e
+           JOIN nodes s ON e.source_node_id = s.id
+           JOIN nodes t ON e.target_node_id = t.id
+           WHERE e.repository_id = ?
+           AND (e.source_node_id IN (SELECT id FROM nodes WHERE file_path = ?)
+                OR e.target_node_id IN (SELECT id FROM nodes WHERE file_path = ?))
+           AND e.edge_type = 'CALLS'
+           LIMIT 20""",
+        (repo_id, fpath, fpath),
+    ).fetchall()
+
+    inherits = conn.execute(
+        """SELECT s.name, t.name FROM edges e
+           JOIN nodes s ON e.source_node_id = s.id
+           JOIN nodes t ON e.target_node_id = t.id
+           WHERE e.repository_id = ?
+           AND e.source_node_id IN (SELECT id FROM nodes WHERE file_path = ?)
+           AND e.edge_type IN ('INHERITS', 'IMPLEMENTS')""",
+        (repo_id, fpath),
+    ).fetchall()
+
+    # Line count from metadata
+    line_count = 0
+    if row[3]:
+        try:
+            meta = json.loads(row[3])
+            line_count = meta.get("end_line", 0) or 0
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    conn.close()
+
+    # Build compressed output (~200 tokens)
+    lines = [f"FILE: {fpath}"]
+    if line_count:
+        lines.append(f"  {line_count} lines")
+
+    # Group entities by type
+    by_type: dict[str, list[str]] = {}
+    for e in entities:
+        etype = e[1]
+        ename = e[0]
+        by_type.setdefault(etype, []).append(ename)
+
+    for etype in ["class", "interface", "function", "method", "enum", "constant", "variable"]:
+        names = by_type.get(etype, [])
+        if names:
+            lines.append(f"  {etype.upper()}S({len(names)}): {', '.join(names[:15])}")
+
+    if imports:
+        imp_names = [i[0] for i in imports[:10]]
+        lines.append(f"  IMPORTS: {', '.join(imp_names)}")
+
+    if dependents:
+        dep_names = [d[0] for d in dependents[:10]]
+        lines.append(f"  DEPENDED_ON_BY: {', '.join(dep_names)}")
+
+    if inherits:
+        rels = [f"{s} -> {t}" for s, t in inherits[:5]]
+        lines.append(f"  INHERITS/IMPLEMENTS: {', '.join(rels)}")
+
+    if calls:
+        call_pairs = [f"{s}()" for s, t in calls[:8]]
+        lines.append(f"  CALLS: {', '.join(call_pairs)}")
+
+    return "\n".join(lines)
+
+
 def main(db_path: Path | None = None, port: int | None = None) -> None:
     global _CUSTOM_DB_PATH
     if db_path is not None:

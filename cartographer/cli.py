@@ -1370,3 +1370,148 @@ def _get_repo(ctx) -> tuple[str, str] | None:
     row = conn.execute("SELECT path, name FROM repositories LIMIT 1").fetchone()
     conn.close()
     return row
+
+
+@main.command("file-summary")
+@click.argument("file_path")
+@click.option("--repo", default=None, help="Repository name")
+@click.pass_context
+def file_summary(ctx, file_path, repo):
+    """Compressed file summary for agents — ~200 tokens instead of ~2000."""
+    import json as _json
+    import os as _os
+
+    from cartographer.storage.connection import get_connection, init_schema
+
+    db_path = ctx.obj["db_path"]
+    _ensure_indexed(db_path)
+    conn = get_connection(db_path)
+    init_schema(conn)
+
+    # Find repo
+    if repo:
+        repo_row = conn.execute(
+            "SELECT id, path FROM repositories WHERE name = ?", (repo,)
+        ).fetchone()
+    else:
+        repo_row = conn.execute(
+            "SELECT id, path FROM repositories ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+
+    if not repo_row:
+        conn.close()
+        click.echo(_json.dumps({"error": "No repository found"}))
+        return
+
+    repo_id, repo_path = repo_row[0], repo_row[1]
+
+    # Resolve file path
+    fpath = file_path
+    row = conn.execute(
+        "SELECT id, name, node_type, metadata_json FROM nodes WHERE repository_id = ? AND file_path = ? AND node_type = 'file'",
+        (repo_id, fpath),
+    ).fetchone()
+
+    if not row:
+        basename = _os.path.basename(fpath)
+        row = conn.execute(
+            "SELECT id, name, node_type, metadata_json FROM nodes WHERE repository_id = ? AND name = ? AND node_type = 'file' LIMIT 1",
+            (repo_id, basename),
+        ).fetchone()
+
+    if not row:
+        conn.close()
+        click.echo(_json.dumps({"error": f"File not found in graph: {file_path}"}))
+        return
+
+    file_node_id = row[0]
+
+    # All entities in this file
+    entities = conn.execute(
+        """SELECT n.name, n.node_type FROM nodes n
+           JOIN edges e ON e.source_node_id = ?
+           WHERE e.repository_id = ? AND e.target_node_id = n.id
+           AND e.edge_type IN ('DEFINES', 'DECLARES')
+           ORDER BY n.node_type, n.name""",
+        (file_node_id, repo_id),
+    ).fetchall()
+
+    # Outgoing imports
+    imports = conn.execute(
+        """SELECT t.name FROM edges e
+           JOIN nodes t ON e.target_node_id = t.id
+           WHERE e.repository_id = ? AND e.source_node_id = ? AND e.edge_type = 'IMPORTS'""",
+        (repo_id, file_node_id),
+    ).fetchall()
+
+    # Incoming dependents
+    dependents = conn.execute(
+        """SELECT s.name FROM edges e
+           JOIN nodes s ON e.source_node_id = s.id
+           WHERE e.repository_id = ? AND e.target_node_id = ? AND e.edge_type = 'IMPORTS'""",
+        (repo_id, file_node_id),
+    ).fetchall()
+
+    # Internal relationships
+    calls = conn.execute(
+        """SELECT s.name, t.name FROM edges e
+           JOIN nodes s ON e.source_node_id = s.id
+           JOIN nodes t ON e.target_node_id = t.id
+           WHERE e.repository_id = ?
+           AND (e.source_node_id IN (SELECT id FROM nodes WHERE file_path = ?)
+                OR e.target_node_id IN (SELECT id FROM nodes WHERE file_path = ?))
+           AND e.edge_type = 'CALLS'
+           LIMIT 20""",
+        (repo_id, fpath, fpath),
+    ).fetchall()
+
+    inherits = conn.execute(
+        """SELECT s.name, t.name FROM edges e
+           JOIN nodes s ON e.source_node_id = s.id
+           JOIN nodes t ON e.target_node_id = t.id
+           WHERE e.repository_id = ?
+           AND e.source_node_id IN (SELECT id FROM nodes WHERE file_path = ?)
+           AND e.edge_type IN ('INHERITS', 'IMPLEMENTS')""",
+        (repo_id, fpath),
+    ).fetchall()
+
+    # Line count from metadata
+    line_count = 0
+    if row[3]:
+        try:
+            meta = _json.loads(row[3])
+            line_count = meta.get("end_line", 0) or 0
+        except (_json.JSONDecodeError, TypeError):
+            pass
+
+    conn.close()
+
+    # Build compressed output
+    lines = [f"FILE: {fpath}"]
+    if line_count:
+        lines.append(f"  {line_count} lines")
+
+    by_type: dict[str, list[str]] = {}
+    for ename, etype in entities:
+        by_type.setdefault(etype, []).append(ename)
+
+    for etype in ["class", "interface", "function", "method", "enum", "constant", "variable"]:
+        names = by_type.get(etype, [])
+        if names:
+            lines.append(f"  {etype.upper()}S({len(names)}): {', '.join(names[:15])}")
+
+    if imports:
+        lines.append(f"  IMPORTS: {', '.join(i[0] for i in imports[:10])}")
+
+    if dependents:
+        lines.append(f"  DEPENDED_ON_BY: {', '.join(d[0] for d in dependents[:10])}")
+
+    if inherits:
+        rels = [f"{s} -> {t}" for s, t in inherits[:5]]
+        lines.append(f"  INHERITS/IMPLEMENTS: {', '.join(rels)}")
+
+    if calls:
+        call_pairs = [f"{s}()" for s, t in calls[:8]]
+        lines.append(f"  CALLS: {', '.join(call_pairs)}")
+
+    click.echo("\n".join(lines))

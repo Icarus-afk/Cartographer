@@ -416,6 +416,15 @@ export class CartographerClient {
     } catch { return '{"error":"delete_file_failed"}'; }
   }
 
+  async fileSummary(filePath: string, repoName?: string): Promise<string> {
+    try {
+      const repo = repoName || this.repoName();
+      return await this.mcpOrCli("file_summary", { file_path: filePath, repo },
+        () => this.exec(["file-summary", filePath, "--repo", repo])
+      );
+    } catch { return "File summary unavailable."; }
+  }
+
   async invokeWatch(root?: string): Promise<string> {
     const target = root || this._projectRoot;
     try {

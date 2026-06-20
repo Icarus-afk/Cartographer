@@ -98,6 +98,7 @@ export function activate(_ctx: vscode.ExtensionContext): void {
     ["cartographer.watch", cmdWatch],
     ["cartographer.context", cmdContext],
     ["cartographer.dbInfo", cmdDbInfo],
+    ["cartographer.fileSummary", cmdFileSummary],
   ];
 
   for (const [id, fn] of cmds) {
@@ -571,6 +572,18 @@ async function cmdDbInfo(): Promise<void> {
   } catch (e) {
     showError(`DB info failed: ${e}`);
   }
+}
+
+async function cmdFileSummary(): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) return void showError("No active editor");
+  const filePath = editor.document.uri.fsPath;
+  const c = clients.forUri(editor.document.uri);
+  if (!c) return void showError("No Cartographer client for this file");
+  withProgress("Cartographer: Summarizing file...", async () => {
+    const summary = await c.fileSummary(filePath);
+    showOutput(`File Summary: ${filePath.split("/").pop()}`, summary);
+  });
 }
 
 function cmdGraph(entityType?: string, repoName?: string): void {

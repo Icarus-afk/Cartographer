@@ -29,7 +29,8 @@
       { "command": "cartographer.refresh", "title": "Cartographer: Refresh Views", "icon": "$(refresh)" },
       { "command": "cartographer.watch", "title": "Cartographer: Watch for File Changes", "icon": "$(eye)" },
       { "command": "cartographer.context", "title": "Cartographer: Generate Context Package", "icon": "$(package)" },
-      { "command": "cartographer.dbInfo", "title": "Cartographer: Database Info", "icon": "$(database)" }
+      { "command": "cartographer.dbInfo", "title": "Cartographer: Database Info", "icon": "$(database)" },
+      { "command": "cartographer.fileSummary", "title": "Cartographer: File Summary (for Agents)", "icon": "$(file-text)" }
     ],
     "keybindings": [
       { "key": "ctrl+shift+c i", "command": "cartographer.index" },
@@ -38,7 +39,8 @@
       { "key": "ctrl+shift+c g", "command": "cartographer.graph" },
       { "key": "ctrl+shift+c w", "command": "cartographer.watch" },
       { "key": "ctrl+shift+c d", "command": "cartographer.dbInfo" },
-      { "key": "ctrl+shift+c c", "command": "cartographer.context" }
+      { "key": "ctrl+shift+c c", "command": "cartographer.context" },
+      { "key": "ctrl+shift+c f", "command": "cartographer.fileSummary" }
     ],
     "configuration": {
       "title": "Cartographer",
