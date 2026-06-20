@@ -11,6 +11,8 @@ _API_DECORATORS = (
     ".options(", ".head(", ".trace(",
 )
 
+_IMPLEMENTATION_bases = ("Protocol", "ABC", "ABCMeta", "abc.ABC", "abc.ABCMeta")
+
 
 class PythonParser(BaseParser):
     def _build_language(self) -> Language:
@@ -122,9 +124,12 @@ class PythonParser(BaseParser):
 
         relationships: list[Relationship] = []
         for b in bases:
+            rel_type = "IMPLEMENTS" if any(
+                ib in b for ib in _IMPLEMENTATION_bases
+            ) else "INHERITS"
             relationships.append(Relationship(
                 target_name=b.strip(),
-                relationship_type="INHERITS",
+                relationship_type=rel_type,
             ))
 
         loc = self._location_from_node(node)
@@ -208,18 +213,34 @@ class PythonParser(BaseParser):
             if child.type == "expression_statement":
                 expr = child.children[0] if child.children else None
                 if expr and expr.type == "string":
-                    return self._node_text(expr, source).strip('"').strip("'")
+                    text = self._node_text(expr, source)
+                    if text.startswith('"""') or text.startswith("'''"):
+                        return text[3:-3].strip()
+                    return text.strip('"').strip("'")
         return None
 
     def _extract_params(self, node: Node, source: bytes) -> list[str]:
         params = node.child_by_field_name("parameters")
         if not params:
             return []
-        return [
-            self._node_text(p, source).split(":")[0].strip()
-            for p in params.children
-            if p.type == "identifier"
-        ]
+        result: list[str] = []
+        for p in params.children:
+            if p.type == "identifier":
+                result.append(self._node_text(p, source))
+            elif p.type == "default_parameter":
+                name_node = p.child_by_field_name("name")
+                if name_node:
+                    result.append(self._node_text(name_node, source))
+            elif p.type == "typed_parameter":
+                name_node = p.child_by_field_name("name")
+                if name_node:
+                    result.append(self._node_text(name_node, source))
+            elif p.type in ("*args", "keyword_separator"):
+                if p.type == "*args":
+                    name_node = p.child_by_field_name("name")
+                    if name_node:
+                        result.append("*" + self._node_text(name_node, source))
+        return result
 
     def _extract_calls(self, node: Node, source: bytes, relationships: list[Relationship]) -> None:
         if node.type == "call":

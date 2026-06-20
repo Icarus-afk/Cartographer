@@ -166,11 +166,6 @@ class JavaScriptParser(BaseParser):
             parsed = self._parse_node(child, source, file_path)
             if parsed:
                 if parsed.name == "anonymous":
-                    parsed = ParsedEntity(
-                        kind=parsed.kind,
-                        name="default",
-                        location=parsed.location,
-                        children=parsed.children,
-                    )
+                    parsed.name = "default"
                 return parsed
         return None

@@ -66,8 +66,11 @@ class JuliaParser(BaseParser):
         body = node.child_by_field_name("body")
         if body:
             for child in body.children:
-                if child.type in ("function_definition", "call_expression"):
-                    continue
+                if child.type == "function_definition":
+                    parsed = self._extract_function(child, source, file_path)
+                    if parsed:
+                        parsed.kind = EntityKind.METHOD
+                        children.append(parsed)
 
         return ParsedEntity(
             kind=EntityKind.CLASS, name=name,

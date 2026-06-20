@@ -149,6 +149,14 @@ class JavaParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        docstring = self._extract_leading_docstring(node, source)
+
+        modifiers = [c.type for c in node.children if c.type in (
+            "public", "private", "protected", "static", "final", "abstract",
+        )]
+        meta: dict = {}
+        if modifiers:
+            meta["modifiers"] = modifiers
 
         relationships: list[Relationship] = []
         self._extract_calls(node, source, relationships)
@@ -156,6 +164,8 @@ class JavaParser(BaseParser):
         return ParsedEntity(
             kind=EntityKind.METHOD, name=name,
             location=CodeLocation(**loc),
+            docstring=docstring,
+            metadata=meta,
             relationships=relationships,
         )
 

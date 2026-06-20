@@ -46,10 +46,30 @@ class PHPPhpParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+
+        relationships: list[Relationship] = []
+        base_clause = node.child_by_field_name("base_clause")
+        if base_clause:
+            base_name = self._node_text(base_clause, source)
+            relationships.append(Relationship(
+                target_name=base_name,
+                relationship_type="INHERITS",
+            ))
+        interfaces = node.child_by_field_name("interfaces")
+        if interfaces:
+            for child in interfaces.children:
+                if child.type in ("qualified_name", "name", "interface"):
+                    rel_name = self._node_text(child, source)
+                    relationships.append(Relationship(
+                        target_name=rel_name,
+                        relationship_type="IMPLEMENTS",
+                    ))
+
         children = self._extract_body(node, source, file_path)
         return ParsedEntity(
             kind=EntityKind.CLASS, name=name,
             location=CodeLocation(**loc), children=children,
+            relationships=relationships,
         )
 
     def _extract_interface(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

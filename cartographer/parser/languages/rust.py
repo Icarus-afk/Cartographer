@@ -52,6 +52,7 @@ class RustParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        docstring = self._extract_leading_docstring(node, source)
 
         pub = any(c.type == "pub" for c in node.children)
         signature = node.child_by_field_name("signature")
@@ -68,6 +69,7 @@ class RustParser(BaseParser):
             kind=EntityKind.FUNCTION,
             name=name,
             location=CodeLocation(**loc),
+            docstring=docstring,
             metadata={"public": pub, "return_type": return_type},
             relationships=relationships,
         )

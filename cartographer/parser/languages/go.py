@@ -16,13 +16,17 @@ class GoParser(BaseParser):
         root = self._parser.parse(source).root_node
 
         for child in root.children:
-            entity = self._parse_node(child, source, file_path)
-            if entity:
-                entities.append(entity)
+            result = self._parse_node(child, source, file_path)
+            if isinstance(result, list):
+                entities.extend(result)
+            elif result:
+                entities.append(result)
 
         return entities
 
-    def _parse_node(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
+    def _parse_node(
+        self, node: Node, source: bytes, file_path: str
+    ) -> list[ParsedEntity] | ParsedEntity | None:
         if node.type == "function_declaration":
             return self._extract_function(node, source, file_path)
         if node.type == "method_declaration":
@@ -42,6 +46,9 @@ class GoParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        docstring = self._extract_leading_docstring(node, source)
+
+        meta: dict = {"exported": name[0].isupper() if name else False}
 
         relationships: list[Relationship] = []
         self._extract_calls(node, source, relationships)
@@ -50,6 +57,8 @@ class GoParser(BaseParser):
             kind=EntityKind.FUNCTION,
             name=name,
             location=CodeLocation(**loc),
+            docstring=docstring,
+            metadata=meta,
             relationships=relationships,
         )
 
@@ -60,6 +69,9 @@ class GoParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        docstring = self._extract_leading_docstring(node, source)
+
+        meta: dict = {"exported": name[0].isupper() if name else False}
 
         relationships: list[Relationship] = []
         self._extract_calls(node, source, relationships)
@@ -68,6 +80,8 @@ class GoParser(BaseParser):
             kind=EntityKind.METHOD,
             name=name,
             location=CodeLocation(**loc),
+            docstring=docstring,
+            metadata=meta,
             relationships=relationships,
         )
 
@@ -106,14 +120,7 @@ class GoParser(BaseParser):
                                         location=CodeLocation(**floc),
                                     ))
                 elif type_node and type_node.type == "interface_type":
-                    body = type_node.child_by_field_name("body")
-                    if body:
-                        for item in body.children:
-                            if item.type == "type_identifier":
-                                relationships.append(Relationship(
-                                    target_name=self._node_text(item, source),
-                                    relationship_type="INHERITS",
-                                ))
+                    pass
 
                 return ParsedEntity(
                     kind=kind,
@@ -124,21 +131,24 @@ class GoParser(BaseParser):
                 )
         return None
 
-    def _extract_const_or_var(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
+    def _extract_const_or_var(
+        self, node: Node, source: bytes, file_path: str
+    ) -> list[ParsedEntity]:
         kind = EntityKind.CONSTANT if node.type == "const_declaration" else EntityKind.VARIABLE
+        entities: list[ParsedEntity] = []
+        spec_type = "const_spec" if node.type == "const_declaration" else "var_spec"
         for child in node.children:
-            if child.type == "const_spec" or child.type == "var_spec":
+            if child.type == spec_type:
                 name_node = child.child_by_field_name("name")
                 if name_node:
                     loc = self._location_from_node(child)
                     loc["file_path"] = file_path
-                    return ParsedEntity(
+                    entities.append(ParsedEntity(
                         kind=kind,
                         name=self._node_text(name_node, source),
                         location=CodeLocation(**loc),
-                    )
-                continue
-        return None
+                    ))
+        return entities
 
     def _extract_import(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
         loc = self._location_from_node(node)

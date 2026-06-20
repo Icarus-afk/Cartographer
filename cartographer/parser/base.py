@@ -70,10 +70,15 @@ class BaseParser(ABC):
             if func:
                 name = self._node_text(func, source)
                 if "." not in name and " " not in name and "(" not in name:
-                    relationships.append(Relationship(
-                        target_name=name,
-                        relationship_type="CALLS",
-                    ))
+                    is_dup = any(
+                        r.target_name == name and r.relationship_type == "CALLS"
+                        for r in relationships
+                    )
+                    if not is_dup:
+                        relationships.append(Relationship(
+                            target_name=name,
+                            relationship_type="CALLS",
+                        ))
         for child in node.children:
             self._extract_calls(child, source, relationships)
 
@@ -88,3 +93,19 @@ class BaseParser(ABC):
             "end_line": node.end_point[0] + 1,
             "end_col": node.end_point[1] + 1,
         }
+
+    def _extract_leading_docstring(self, node: Node, source: bytes) -> str | None:
+        prev = node.prev_sibling
+        if not prev:
+            return None
+        if prev.type == "comment":
+            text = self._node_text(prev, source)
+            if text.startswith("///") or text.startswith("//!"):
+                return text[3:].strip()
+            if text.startswith("/**") and text.endswith("*/"):
+                return text[3:-3].strip()
+            if text.startswith("//"):
+                return text[2:].strip()
+        if prev.type == "documentation_comment":
+            return self._node_text(prev, source).strip()
+        return None

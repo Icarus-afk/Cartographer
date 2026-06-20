@@ -56,6 +56,26 @@ class GroovyParser(BaseParser):
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
 
+        relationships: list[Relationship] = []
+        superclass = node.child_by_field_name("superclass")
+        if superclass:
+            for child in superclass.children:
+                if child.type in ("type_identifier", "identifier"):
+                    rel_name = self._node_text(child, source)
+                    relationships.append(Relationship(
+                        target_name=rel_name,
+                        relationship_type="INHERITS",
+                    ))
+        interfaces = node.child_by_field_name("interfaces")
+        if interfaces:
+            for child in interfaces.children:
+                if child.type in ("type_identifier", "identifier"):
+                    rel_name = self._node_text(child, source)
+                    relationships.append(Relationship(
+                        target_name=rel_name,
+                        relationship_type="IMPLEMENTS",
+                    ))
+
         children: list[ParsedEntity] = []
         body = node.child_by_field_name("body")
         if body:
@@ -76,6 +96,7 @@ class GroovyParser(BaseParser):
         return ParsedEntity(
             kind=EntityKind.CLASS, name=name,
             location=CodeLocation(**loc), children=children,
+            relationships=relationships,
         )
 
     def _extract_interface(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

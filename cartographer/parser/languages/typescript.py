@@ -39,11 +39,37 @@ class TypeScriptParser(JavaScriptParser):
             if child.type == "extends_type_clause":
                 self._add_inherits(child, source, relationships)
 
+        children: list[ParsedEntity] = []
+        body = node.child_by_field_name("body")
+        if body:
+            for child in body.children:
+                if child.type == "method_signature":
+                    method_name = child.child_by_field_name("name")
+                    if method_name:
+                        mloc = self._location_from_node(child)
+                        mloc["file_path"] = file_path
+                        children.append(ParsedEntity(
+                            kind=EntityKind.METHOD,
+                            name=self._node_text(method_name, source),
+                            location=CodeLocation(**mloc),
+                        ))
+                elif child.type == "property_signature":
+                    prop_name = child.child_by_field_name("name")
+                    if prop_name:
+                        ploc = self._location_from_node(child)
+                        ploc["file_path"] = file_path
+                        children.append(ParsedEntity(
+                            kind=EntityKind.VARIABLE,
+                            name=self._node_text(prop_name, source),
+                            location=CodeLocation(**ploc),
+                        ))
+
         return ParsedEntity(
             kind=EntityKind.INTERFACE,
             name=name,
             location=CodeLocation(**loc),
             metadata=meta,
+            children=children,
             relationships=relationships,
         )
 

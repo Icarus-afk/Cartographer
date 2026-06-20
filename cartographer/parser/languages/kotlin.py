@@ -86,9 +86,23 @@ class KotlinParser(BaseParser):
         name = self._node_text(name_node, source) if name_node else "<companion>"
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+
+        children: list[ParsedEntity] = []
+        body = node.child_by_field_name("body")
+        if body:
+            for child in body.children:
+                if child.type == "fun_declaration":
+                    parsed = self._extract_function(child, source, file_path, EntityKind.METHOD)
+                    if parsed:
+                        children.append(parsed)
+                elif child.type == "property_declaration":
+                    parsed = self._extract_property(child, source, file_path)
+                    if parsed:
+                        children.append(parsed)
+
         return ParsedEntity(
             kind=EntityKind.CLASS, name=name,
-            location=CodeLocation(**loc),
+            location=CodeLocation(**loc), children=children,
         )
 
     def _extract_function(

@@ -31,7 +31,9 @@ class CParser(BaseParser):
             return self._extract_struct(node, source, file_path)
         if node.type == "declaration":
             return self._extract_declaration(node, source, file_path)
-        if node.type in ("preproc_include", "preproc_def", "comment"):
+        if node.type == "preproc_include":
+            return self._extract_include(node, source, file_path)
+        if node.type in ("preproc_def", "comment"):
             return None
         return None
 
@@ -101,11 +103,20 @@ class CParser(BaseParser):
         for child in node.children:
             if child.type == "identifier":
                 name = self._node_text(child, source)
-                if name.isupper():
-                    loc = self._location_from_node(node)
-                    loc["file_path"] = file_path
-                    return ParsedEntity(
-                        kind=EntityKind.CONSTANT, name=name,
-                        location=CodeLocation(**loc),
-                    )
+                loc = self._location_from_node(node)
+                loc["file_path"] = file_path
+                kind = EntityKind.CONSTANT if name.isupper() else EntityKind.VARIABLE
+                return ParsedEntity(
+                    kind=kind, name=name,
+                    location=CodeLocation(**loc),
+                )
         return None
+
+    def _extract_include(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:
+        loc = self._location_from_node(node)
+        loc["file_path"] = file_path
+        return ParsedEntity(
+            kind=EntityKind.MODULE,
+            name=f"import:{self._node_text(node, source)}",
+            location=CodeLocation(**loc),
+        )

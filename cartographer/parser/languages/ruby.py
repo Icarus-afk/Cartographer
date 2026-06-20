@@ -41,6 +41,15 @@ class RubyParser(BaseParser):
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
 
+        relationships: list[Relationship] = []
+        superclass = node.child_by_field_name("superclass")
+        if superclass:
+            super_name = self._node_text(superclass, source)
+            relationships.append(Relationship(
+                target_name=super_name,
+                relationship_type="INHERITS",
+            ))
+
         children: list[ParsedEntity] = []
         body = node.child_by_field_name("body")
         if body:
@@ -57,6 +66,7 @@ class RubyParser(BaseParser):
         return ParsedEntity(
             kind=EntityKind.CLASS, name=name,
             location=CodeLocation(**loc), children=children,
+            relationships=relationships,
         )
 
     def _extract_module(self, node: Node, source: bytes, file_path: str) -> ParsedEntity | None:

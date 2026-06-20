@@ -89,9 +89,25 @@ class SwiftParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+
+        children: list[ParsedEntity] = []
+        body = node.child_by_field_name("body")
+        if body:
+            for child in body.children:
+                if child.type == "function_declaration":
+                    parsed = self._extract_function(child, source, file_path)
+                    if parsed:
+                        parsed.kind = EntityKind.METHOD
+                        children.append(parsed)
+                elif child.type == "variable_declaration":
+                    parsed = self._extract_variable(child, source, file_path)
+                    if parsed:
+                        children.append(parsed)
+
         return ParsedEntity(
             kind=EntityKind.INTERFACE, name=name,
             location=CodeLocation(**loc),
+            children=children,
             relationships=self._extract_inheritance(node, source),
         )
 

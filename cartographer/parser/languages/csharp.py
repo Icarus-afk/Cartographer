@@ -77,7 +77,10 @@ class CSharpParser(BaseParser):
         loc["file_path"] = file_path
         children = self._extract_members(node, source, file_path)
         base_types = self._extract_base_types(node, source)
-        relationships = [Relationship(target_name=t, relationship_type="INHERITS") for t in base_types]
+        relationships = [
+            Relationship(target_name=t, relationship_type="INHERITS")
+            for t in base_types
+        ]
         return ParsedEntity(
             kind=EntityKind.CLASS, name=name,
             location=CodeLocation(**loc), children=children,
@@ -92,10 +95,28 @@ class CSharpParser(BaseParser):
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
         base_types = self._extract_base_types(node, source)
-        relationships = [Relationship(target_name=t, relationship_type="INHERITS") for t in base_types]
+        relationships = [
+            Relationship(target_name=t, relationship_type="INHERITS")
+            for t in base_types
+        ]
+
+        children: list[ParsedEntity] = []
+        body = node.child_by_field_name("body")
+        if body:
+            for child in body.children:
+                if child.type == "method_declaration":
+                    parsed = self._extract_method(child, source, file_path)
+                    if parsed:
+                        children.append(parsed)
+                elif child.type == "property_declaration":
+                    parsed = self._extract_property(child, source, file_path)
+                    if parsed:
+                        children.append(parsed)
+
         return ParsedEntity(
             kind=EntityKind.INTERFACE, name=name,
             location=CodeLocation(**loc),
+            children=children,
             relationships=relationships,
         )
 
@@ -138,6 +159,7 @@ class CSharpParser(BaseParser):
         name = self._node_text(name_node, source)
         loc = self._location_from_node(node)
         loc["file_path"] = file_path
+        docstring = self._extract_leading_docstring(node, source)
 
         relationships: list[Relationship] = []
         self._extract_calls(node, source, relationships)
@@ -145,6 +167,7 @@ class CSharpParser(BaseParser):
         return ParsedEntity(
             kind=EntityKind.METHOD, name=name,
             location=CodeLocation(**loc),
+            docstring=docstring,
             relationships=relationships,
         )
 

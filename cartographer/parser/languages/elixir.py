@@ -19,7 +19,7 @@ class ElixirParser(BaseParser):
     def extract_entities(self, source: bytes, file_path: str) -> list[ParsedEntity]:
         entities: list[ParsedEntity] = []
         root = self._parser.parse(source).root_node
-        for child in root.named_children:
+        for child in root.children:
             entity = self._parse_call(child, source, file_path)
             if entity:
                 entities.append(entity)
