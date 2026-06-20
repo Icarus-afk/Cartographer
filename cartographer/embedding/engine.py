@@ -171,6 +171,17 @@ def generate_embeddings(
         conn.close()
         return 0, 0
 
+    # Count total embeddable nodes to compute skip count
+    total_row = conn.execute(
+        f"""SELECT COUNT(*) FROM nodes n
+            JOIN repositories r ON n.repository_id = r.id
+            WHERE n.node_type IN ({placeholders})
+            {repo_filter}""",
+        [*embeddable_types_list, *params],
+    ).fetchone()
+    total_embeddable = total_row[0] if total_row else 0
+    skip_count = total_embeddable - len(rows)
+
     texts: list[str] = []
     node_ids: list[int] = []
     for row in tqdm(rows, desc="Preparing texts", unit="node"):
@@ -199,7 +210,7 @@ def generate_embeddings(
     conn.commit()
     conn.close()
 
-    return len(node_ids), 0
+    return len(node_ids), skip_count
 
 
 def embed_nodes(

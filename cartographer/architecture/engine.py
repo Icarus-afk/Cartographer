@@ -58,7 +58,8 @@ CLASS_PREFIX_RULES: list[tuple[str, str, float]] = [
 ]
 
 INTERFACE_PREFIX_RULES: list[tuple[str, str, float]] = [
-    # "IFoo" convention (C#/Java); only matches I followed by uppercase
+    # "IFoo" convention (C#/Java); matches I followed by uppercase letter
+    # "AbstractFoo" convention (Java); matches Abstract followed by uppercase letter
 ]
 
 FILE_NAME_RULES: list[tuple[str, str, float]] = [
@@ -569,6 +570,15 @@ def _collect_evidence(
         for layer, weight, reason in _score_name(cname, CLASS_SUFFIX_RULES):
             if weight >= 0.6:
                 _add_evidence(layer, "class_naming", f"{cname} ({fpath})", reason, weight)
+
+    # 1b. Interface/class prefix detection (C# I-prefix, Java Abstract-prefix)
+    for cname, fpath in all_class_rows:
+        if len(cname) > 1 and cname[0] == "I" and cname[1].isupper():
+            _add_evidence("data", "class_naming", f"{cname} ({fpath})",
+                          "interface prefix 'I'", 0.7)
+        elif cname.startswith("Abstract") and len(cname) > 8 and cname[8].isupper():
+            _add_evidence("business", "class_naming", f"{cname} ({fpath})",
+                          "abstract class prefix 'Abstract'", 0.6)
 
     # 2. Function/method naming
     for fname, fpath in all_function_rows:
