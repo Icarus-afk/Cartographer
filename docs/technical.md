@@ -883,6 +883,18 @@ Uses **Model Context Protocol** (MCP SDK 1.27.2) with FastMCP on stdio transport
 | `delete_file` | Remove a deleted file from the graph | `file_path`, `db?` |
 | `db_info` | Show database statistics | `db?` |
 
+### File Summary Tool
+
+The `file_summary` tool compresses any file into ~200 tokens of structured metadata, replacing full file reads (~2000 tokens). Returns:
+
+- Entity breakdown by type (classes, functions, methods, constants)
+- Incoming imports (what this file depends on)
+- Outgoing dependents (what imports this file)
+- Inheritance and implementation relationships
+- Internal call graph
+
+This achieves **90% token savings** per file read for AI coding agents.
+
 All tools return plain text formatted for LLM consumption.
 
 ### Discovery
@@ -922,6 +934,7 @@ Configure Claude Desktop, Cursor, or OpenCode to connect:
 | `cartographer similar TARGET` | Semantic similarity | `--repo`, `--limit` |
 | `cartographer architecture` | Architecture | `--detect`, `--repo`, `--verbose` |
 | `cartographer graph-data` | Export graph as JSON (for VS Code) | `--repo`, `--limit`, `--offset`, `--dir`, `--expand-node-id` |
+| `cartographer file-summary FILE` | Compressed file summary (~200 tokens) | `--repo` |
 | `cartographer watch PATH` | Watch repo for changes (auto re-index) | (none) |
 | `cartographer update-index FILE` | Incrementally re-index a single file | (none) |
 | `cartographer delete-file FILE` | Remove a deleted file from the graph | (none) |

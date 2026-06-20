@@ -311,6 +311,7 @@ Agent: Calls cartographer search "auth" → 200 tokens
 | Task | Without Cartographer | With Cartographer | Savings |
 |---|---|---|---|
 | **Repo onboarding** | Read 50+ files (~60K tokens) | `summarize` + `architecture` (700 tokens) | **98.8%** |
+| **Read a file** | Read full source (500–2000 tokens) | `file_summary` (~200 tokens) | **90%** |
 | **"How does X work?"** | Read X + imports + callers (5–8 files, ~6K tokens) | `search X` + `impact X` (500 tokens) | **91.7%** |
 | **"What depends on Y?"** | grep + read each dependent (10 files, ~12K tokens) | `impact Y` (300 tokens) | **97.5%** |
 | **"Architecture overview"** | Read directory tree + key configs (20 files, ~15K tokens) | `architecture --detect` (500 tokens) | **96.7%** |
@@ -354,6 +355,7 @@ Tools:
   similar      — Semantic similarity search (requires embed)
   ask          — Natural language question answering
   graph_data   — Export graph as JSON for visualization (deterministic hub sampling)
+  file_summary — Compressed file summary for agents (~200 tokens vs ~2000 for full file)
   index        — Index a repository
   context      — Generate structured context package
   update_index — Incrementally re-index a single file
@@ -557,7 +559,7 @@ DEFINES edges dominate (60–70% of all edges). IMPORTS ~25% for Python/Java.
 | Storage efficiency | 310 bytes/node |
 | Graph query latency | 600–720 ms |
 | Semantic search speedup | 280x (numpy batch) |
-| MCP tools | 14 |
+| MCP tools | 15 |
 | MCP resources | 3 |
 | CLI commands | 26 |
 | VS Code extension commands | 17 |

@@ -143,6 +143,14 @@ cartographer impact config.py
 
 This answers the question "what would break if I changed this file?" by tracing all import/reference edges backwards from the target.
 
+### Get a compressed file summary
+
+```bash
+cartographer file-summary auth_service.py
+```
+
+Returns a ~200-token summary of the file: entities, imports, dependents, and relationships. **90% cheaper than reading the full file** — ideal for AI coding agents.
+
 ### Explore connections
 
 ```bash

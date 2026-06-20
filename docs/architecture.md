@@ -620,6 +620,7 @@ Uses **Model Context Protocol** (MCP SDK 1.27.2) with FastMCP on stdio transport
 | `similar` | target, repo?, limit?, db? | Semantic similarity |
 | `ask` | query, repo?, limit?, max_tokens?, db? | Natural language Q&A |
 | `graph_data` | repo?, limit?, offset?, dir?, expand_node_id?, db? | Export graph as JSON for visualization |
+| `file_summary` | file_path, repo?, db? | Compressed file summary (~200 tokens vs ~2000 for full file) |
 | `index` | path, db? | Index a repository |
 | `context` | repo?, top_n?, max_tokens?, db? | Generate structured context package |
 | `update_index` | file_path, db? | Incrementally re-index a single file |

@@ -320,3 +320,17 @@ The first query after a period of inactivity is slower due to SQLite cold cache.
 - Using `-m` to limit output
 - Limiting traversal depth with `--depth 1`
 - Using specific queries instead of broad ones
+- Using `file-summary` instead of reading full files (~200 tokens vs ~2000)
+
+### Agent token costs too high
+
+If your coding agent is burning through tokens on file reads:
+
+1. **Use `file-summary`** — replaces full file reads with ~200-token compressed summaries (90% savings)
+2. **Use `summarize`** — get repo overview in 200 tokens instead of reading 50+ files (98% savings)
+3. **Use `impact`** — see all dependents in 300 tokens instead of grepping and reading 10+ files (97% savings)
+4. **Configure agent rules** — add to `opencode.json` or `.cursorrules`:
+   ```
+   When reading code, always use cartographer file-summary instead of reading the full file.
+   When exploring structure, always use cartographer summarize or architecture.
+   ```
