@@ -1,6 +1,40 @@
-# Cartographer
+<p align="center">
+  <img src="logo.png" alt="Cartographer Logo" width="200"/>
+</p>
 
-**Repository Intelligence Operating System** — transforms any code repository into a navigable semantic knowledge graph that you can search, query, and explore using natural language.
+<h1 align="center">Cartographer</h1>
+
+<p align="center">
+  <strong>Repository Intelligence Operating System</strong>
+</p>
+
+<p align="center">
+  Transform any code repository into a navigable semantic knowledge graph.
+  Search, query, and explore your codebase using natural language.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Icarus-afk/Cartographer/actions"><img src="https://github.com/Icarus-afk/Cartographer/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Icarus-afk/Cartographer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/version-0.1.0-green.svg" alt="Version 0.1.0">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Icarus-afk/Cartographer"><img src="https://img.shields.io/github/stars/Icarus-afk/Cartographer?style=social" alt="GitHub Stars"></a>
+  <a href="https://github.com/Icarus-afk/Cartographer"><img src="https://img.shields.io/github/forks/Icarus-afk/Cartographer?style=social" alt="GitHub Forks"></a>
+  <a href="https://github.com/Icarus-afk/Cartographer/issues"><img src="https://img.shields.io/github/issues/Icarus-afk/Cartographer" alt="GitHub Issues"></a>
+  <a href="https://github.com/Icarus-afk/Cartographer/pulls"><img src="https://img.shields.io/github/issues-pr/Icarus-afk/Cartographer" alt="GitHub Pull Requests"></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/tree--sitter-20%20languages-yellow.svg" alt="20 Languages">
+  <img src="https://img.shields.io/badge/MCP-14%20tools-orange.svg" alt="14 MCP Tools">
+  <img src="https://img.shields.io/badge/tests-73%20passed-brightgreen.svg" alt="73 Tests">
+  <img src="https://img.shields.io/badge/embedding-bge--small--en--v1.5-384--dim-purple.svg" alt="Embedding Model">
+</p>
+
+---
 
 Instead of searching for filenames, you ask questions like *"What does the auth module depend on?"* or *"Explain the architecture of this project."* Cartographer builds a graph of all your code's entities (classes, functions, methods, interfaces, etc.) and the relationships between them, then lets you traverse, analyze, and compress that graph.
 
@@ -11,8 +45,8 @@ Instead of searching for filenames, you ask questions like *"What does the auth 
 ### From source
 
 ```bash
-git clone https://github.com/your-org/cartographer.git
-cd cartographer
+git clone https://github.com/Icarus-afk/Cartographer.git
+cd Cartographer
 pip install -e .
 ```
 
@@ -190,7 +224,7 @@ The VS Code extension provides an interactive knowledge graph, entity browser, a
 
 ### Features
 
-- **Interactive Graph Visualization** — dynamic D3 force graph with pagination ("Load More"), directory tree sidebar filter, debounced search, click-to-expand neighbors, cluster-by-directory layout, zoom (0.05x–15x), and smart labels
+- **Interactive Graph Visualization** — dynamic D3 force graph with pagination ("Load More"), directory tree sidebar filter, debounced search, click-to-expand neighbors, cluster-by-directory layout, zoom (0.05x-15x), and smart labels
 - **Incremental File Watching** — files are re-indexed incrementally on save, delete, or rename (no full re-scan); changes are batched and debounced
 - **Multi-Root Workspace Support** — each workspace folder gets its own client, database, and MCP connection; commands resolve to the active folder automatically; graph view shows a folder picker
 - **MCP-First Architecture** — persistent MCP connection for all tools; transparent fallback to CLI if MCP is unavailable
@@ -297,7 +331,7 @@ The VS Code extension provides an interactive knowledge graph, entity browser, a
 Cartographer has a modular pipeline architecture:
 
 1. **Ingestion Engine** — walks the file tree, detects languages and frameworks, skips binaries and ignored files (`.gitignore` + `.cartographerignore`). Supports incremental `update_index` for single-file changes.
-2. **Parser Engine** — 20 Tree-sitter language parsers (Python, JS, TS/TSX, Go, Rust, Java, Kotlin, C#, PHP, Ruby, C, C++, Swift, Scala, Elixir, Lua, Julia, Zig, Groovy)
+2. **Parser Engine** — 20 Tree-sitter language parsers (Python, JS, TS/TSX, Go, Rust, Java, Kotlin, C#, PHP, Ruby, C, C++, Swift, Scala, Elixir, Lua, Julia, Zig, Groovy) with inheritance, implementation, calls, docstrings, and metadata extraction
 3. **Graph Engine** — SQLite persistence with nodes, edges, directories, embeddings, and git metadata. Supports incremental `update_file_in_graph` and `delete_file_from_graph`.
 4. **Retrieval Engine** — search, traversal, impact analysis, path finding, summarization
 5. **Architecture Engine** — multi-strategy layer detection, pattern matching, dependency flow
@@ -307,6 +341,33 @@ Cartographer has a modular pipeline architecture:
 9. **Query Planner** — intent-driven NL query classification (9 intent types)
 10. **MCP Server** — exposes all tools via Model Context Protocol for AI assistants. Tools: `search`, `impact`, `neighbors`, `path`, `similar`, `ask`, `architecture`, `summarize`, `graph_data`, `index`, `context`, `update_index`, `delete_file`, `db_info`, plus resources for repos/nodes.
 11. **VS Code Extension** — MCP-first TypeScript client with CLI fallback, interactive graph visualization, entity browser, hover provider, incremental file watcher, multi-root workspace support, and per-project configuration.
+
+---
+
+## Supported Languages
+
+| Language | Parser | Inheritance | Interfaces | Calls | Docstrings | Metadata |
+|---|---|---|---|---|---|---|
+| Python | `PythonParser` | INHERITS/IMPLEMENTS | - | YES | YES | decorators, parameters |
+| JavaScript | `JavaScriptParser` | INHERITS | - | YES | - | - |
+| TypeScript | `TypeScriptParser` | INHERITS | YES (members) | YES | - | type_parameters |
+| TSX | `TSXParser` | INHERITS | YES (members) | YES | - | type_parameters |
+| Go | `GoParser` | - | - | YES | YES | exported |
+| Rust | `RustParser` | INHERITS/IMPLEMENTS | YES (traits) | YES | YES | public, return_type |
+| Java | `JavaParser` | INHERITS/IMPLEMENTS | YES | YES | YES | modifiers |
+| Kotlin | `KotlinParser` | INHERITS/IMPLEMENTS | - | YES | - | - |
+| C# | `CSharpParser` | INHERITS | YES (members) | YES | YES | - |
+| PHP | `PHPPhpParser` | INHERITS/IMPLEMENTS | YES | YES | - | - |
+| Ruby | `RubyParser` | INHERITS | - | YES | - | - |
+| C | `CParser` | - | - | YES | - | - |
+| C++ | `CppParser` | - | YES (concepts) | YES | - | - |
+| Swift | `SwiftParser` | INHERITS | YES (members) | YES | - | - |
+| Scala | `ScalaParser` | INHERITS/IMPLEMENTS | YES (traits) | YES | - | - |
+| Elixir | `ElixirParser` | IMPLEMENTS | YES (protocols) | YES | - | - |
+| Lua | `LuaParser` | - | - | YES | - | - |
+| Julia | `JuliaParser` | - | - | YES | - | - |
+| Zig | `ZigParser` | - | YES (error sets) | YES | - | - |
+| Groovy | `GroovyParser` | INHERITS/IMPLEMENTS | YES | YES | - | - |
 
 ---
 
@@ -336,7 +397,7 @@ Tree-sitter language grammars are downloaded on demand when you index a file in 
 | [Architecture Deep Dive](docs/architecture.md) | How the system works internally |
 | [Technical Reference](docs/technical.md) | Comprehensive technical architecture |
 | [OpenCode Integration](docs/opencode.md) | Using Cartographer with AI coding assistants |
-| [Benchmarks](docs/benchmarks.md) | Performance data across 14 real-world repos |
+| [Benchmarks](docs/benchmarks.md) | Performance data across 22 real-world repos |
 | [Whitepaper](docs/whitepaper.md) | Full technical whitepaper |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
 
@@ -352,10 +413,16 @@ Tree-sitter language grammars are downloaded on demand when you index a file in 
 
 ```bash
 pip install -e ".[dev,watch]"
-ruff check cartographer/
-pytest
+make lint    # ruff check cartographer/ tests/
+make test    # pytest -v (73 tests)
 ```
 
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
+
+---
+
+<p align="center">
+  Built with Tree-sitter, SQLite, and fastembed.
+</p>

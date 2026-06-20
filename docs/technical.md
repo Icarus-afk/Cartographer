@@ -294,10 +294,12 @@ Abstract class providing:
 - `_build_language()` — create tree-sitter `Language` object (abstract)
 - `parse_file(path)` — read file, parse with tree-sitter, return bytes + errors
 - `extract_entities(source, file_path)` — extract named entities (abstract)
+- `_extract_calls(node, source, relationships)` — recursive walk finding CALLS relationships (with deduplication)
+- `_extract_leading_docstring(node, source)` — extract leading comments (///, //, /** */, //) as docstrings
 - `_node_text(node, source)` — extract source text for a node
 - `_location_from_node(node)` — convert tree-sitter point to `{start_line, start_col, end_line, end_col}`
 
-Error handling captures both parse errors (tree has errors) and exceptions.
+Error handling captures both parse errors (tree has exceptions. deduplication prevents duplicate CALLS edges.
 
 ### Registry (`registry.py`)
 
@@ -313,10 +315,15 @@ Dispatches top-level children to specialized extractors:
 | `class_definition` | CLASS + method children | `_extract_class` |
 | `decorated_definition` | delegates to inner function/class | `_extract_decorated` |
 | `import_statement` / `import_from_statement` | MODULE | `_extract_import` |
+| `expression_statement` | CONSTANT (module-level assignments) | `_extract_assignment` |
 
 **API Endpoint Detection:** Decorators containing `.route(`, `.get(`, `.post(`, `.put(`, `.delete(`, `.patch(`, `.options(`, `.head(`, or `.trace(` promote the function kind to `API_ENDPOINT` instead of FUNCTION. The HTTP methods and route path are captured in metadata.
 
-**Inheritance:** Base classes from `argument_list` are extracted as `INHERITS` relationships — e.g., `class View(BaseView)` creates `View --[INHERITS]--> BaseView`.
+**Inheritance:** Base classes from `argument_list` are extracted — `Protocol`/`ABC` bases create `IMPLEMENTS` relationships, all others create `INHERITS`. E.g., `class View(BaseView)` → `INHERITS`, `class Service(Protocol)` → `IMPLEMENTS`.
+
+**Docstrings:** Triple-quoted strings (`"""..."""` and `'''...'''`) are extracted from the first expression in function/class bodies.
+
+**Parameters:** Extracted using tree-sitter node types (`identifier`, `default_parameter`, `typed_parameter`) for robustness with complex type annotations.
 
 **Call Detection:** Recursive walk of each function body finds `call` nodes; simple identifier calls (no dots, e.g., `authenticate_user()`) are captured as `CALLS` relationships.
 
@@ -337,7 +344,7 @@ Dispatches top-level children to specialized extractors:
 
 **Value-aware extraction:** If a `variable_declarator`'s value is an arrow function, function expression, or class, the entity kind promotes to FUNCTION or CLASS. So `const handler = () => {}` becomes a FUNCTION, not a CONSTANT.
 
-**Export handling:** `export default function()` without a name falls back to name `"default"`. Class members: `method_definition` → METHOD.
+**Export handling:** `export default function()` without a name falls back to name `"default"`. Relationships from the original entity are preserved during rename (no data loss). Class members: `method_definition` → METHOD.
 
 ### TypeScript Parser (`typescript.py`)
 
@@ -345,11 +352,13 @@ Extends JavaScriptParser with TypeScript-specific nodes:
 
 | Node Type | Extracted As | Method |
 |---|---|---|
-| `interface_declaration` | INTERFACE | `_extract_interface` |
+| `interface_declaration` | INTERFACE + members | `_extract_interface` |
 | `type_alias_declaration` | TYPE_ALIAS | `_extract_type_alias` |
 | `enum_declaration` | ENUM | `_extract_enum` |
 
 For interfaces and type aliases with generics (e.g., `interface Response<T>`), type parameters are captured in metadata as `{"type_parameters": "<T>"}`. Function declarations also capture `type_parameters`.
+
+**Interface Members:** Interface methods (`method_signature`) are extracted as METHOD children, and properties (`property_signature`) as VARIABLE children.
 
 ### TSX Parser (`tsx.py`)
 

@@ -467,7 +467,7 @@ The `--repo` flag scopes queries to a single repo when needed.
 ### 7.1 Quick Install
 
 ```bash
-git clone https://github.com/your-org/cartographer.git
+git clone https://github.com/Icarus-afk/Cartographer.git
 cd cartographer
 pip install -e .
 cartographer version   # → cartographer 0.1.0

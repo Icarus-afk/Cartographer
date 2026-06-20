@@ -243,6 +243,41 @@ Extends TypeScriptParser with JSX handling. Captures top-level JSX expressions:
 | ZigParser | `languages/zig.py` | `tree-sitter-zig` |
 | GroovyParser | `languages/groovy.py` | `tree-sitter-groovy` |
 
+### Relationship Extraction
+
+Each parser extracts these relationship types from the AST:
+
+| Relationship | Description | Extracted By |
+|---|---|---|
+| `CALLS` | Function/method calls | All 20 parsers (via `_extract_calls`) |
+| `INHERITS` | Class/struct inheritance | Python, JS, TS, Java, C#, Kotlin, Swift, Scala, Rust, Ruby, PHP, Groovy |
+| `IMPLEMENTS` | Interface/protocol implementation | Java, C#, Kotlin, Scala, Rust, Elixir, PHP, Groovy |
+| `DECORATES` | Decorator relationships | Python |
+
+### Docstring Extraction
+
+Leading comments are extracted as docstrings for these languages:
+
+| Language | Comment Style | Example |
+|---|---|---|
+| Python | Triple-quoted strings | `"""Module docstring"""` |
+| Java | Javadoc | `/** ... */` |
+| C# | XML doc | `/// ...` |
+| Go | Line comments | `// ...` |
+| Rust | Doc comments | `/// ...` or `//! ...` |
+
+### Metadata Extraction
+
+Parsers attach metadata to entities for richer analysis:
+
+| Language | Entity | Metadata |
+|---|---|---|
+| Python | Functions | `decorators`, `parameters` |
+| TypeScript | Interfaces, Functions | `type_parameters` |
+| Rust | Functions | `public`, `return_type` |
+| Java | Methods | `modifiers` (public, private, protected, static, final) |
+| Go | Functions, Methods | `exported` (uppercase = exported) |
+
 ### Elixir Parser Note
 
 The Elixir Tree-sitter grammar (0.3.5) uses positional children instead of named fields for `call` nodes. The parser uses `child[0]` for the identifier, `child[1]` for arguments, and `child[2]` for the do-block.

@@ -6,7 +6,7 @@ Cartographer turns any repository into a navigable knowledge graph. This guide w
 
 ## Prerequisites
 
-- **Python 3.11 or later** — Cartographer uses modern Python features
+- **Python 3.10 or later** — Cartographer uses modern Python features
 - **pip** — Python package installer
 - **Git** — only needed if you want git intelligence features
 
@@ -17,8 +17,8 @@ Cartographer turns any repository into a navigable knowledge graph. This guide w
 ### From source (recommended for now)
 
 ```bash
-git clone https://github.com/your-org/cartographer.git
-cd cartographer
+git clone https://github.com/Icarus-afk/Cartographer.git
+cd Cartographer
 pip install -e .
 ```
 
