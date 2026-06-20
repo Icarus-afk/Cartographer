@@ -109,12 +109,19 @@ export class McpClient implements vscode.Disposable {
     }
   }
 
-  private send(method: string, params?: Record<string, unknown>): Promise<string> {
+  private send(method: string, params?: Record<string, unknown>, timeoutMs = 30_000): Promise<string> {
     return new Promise((resolve, reject) => {
       const id = ++this.reqId;
       const req: McpRequest = { jsonrpc: "2.0", id, method };
       if (params) req.params = params;
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`MCP ${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (v) => { clearTimeout(timer); resolve(v); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
       const raw = JSON.stringify(req) + "\n";
       this.proc?.stdin?.write(raw);
     });
@@ -131,15 +138,15 @@ export class McpClient implements vscode.Disposable {
       protocolVersion: supportedVersions[0],
       capabilities: { tools: {} },
       clientInfo: { name: "cartographer-vscode", version: "0.1.0" },
-    });
+    }, 10_000);
     const parsed = JSON.parse(resp);
     const serverVersion = parsed.protocolVersion || supportedVersions[0];
     this.sendNotification("notifications/initialized");
   }
 
-  async callTool(name: string, args?: Record<string, unknown>): Promise<string> {
+  async callTool(name: string, args?: Record<string, unknown>, timeoutMs = 30_000): Promise<string> {
     await this._ready;
-    return this.send("tools/call", { name, arguments: args || {} });
+    return this.send("tools/call", { name, arguments: args || {} }, timeoutMs);
   }
 
   async dispose(): Promise<void> {

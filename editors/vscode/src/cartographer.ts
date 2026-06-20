@@ -134,9 +134,9 @@ export class CartographerClient {
     if (this.mcp) { await this.mcp.dispose(); this.mcp = null; }
   }
 
-  private async mcpOrCli(tool: string, mcpArgs: Record<string, unknown>, cliFn: () => Promise<string>): Promise<string> {
+  private async mcpOrCli(tool: string, mcpArgs: Record<string, unknown>, cliFn: () => Promise<string>, timeoutMs = 30_000): Promise<string> {
     if (this.mcp?.running) {
-      try { return await this.mcp.callTool(tool, mcpArgs); }
+      try { return await this.mcp.callTool(tool, mcpArgs, timeoutMs); }
       catch (e) { this.output.appendLine(`MCP ${tool} failed, falling back: ${e}`); }
     }
     return cliFn();
@@ -390,7 +390,7 @@ export class CartographerClient {
       if (offset > 0) { mcpArgs.offset = offset; cliArgs.push("--offset", String(offset)); }
       if (dir) { mcpArgs.dir = dir; cliArgs.push("--dir", dir); }
       if (expandNodeId !== undefined) { mcpArgs.expand_node_id = expandNodeId; cliArgs.push("--expand-node-id", String(expandNodeId)); }
-      const out = await this.mcpOrCli("graph_data", mcpArgs, () => this.exec(cliArgs));
+      const out = await this.mcpOrCli("graph_data", mcpArgs, () => this.exec(cliArgs), 15_000);
       const d = JSON.parse(out);
       if (d.error) { this.output.appendLine(`getGraphData error: ${d.error}`); return { nodes: [], edges: [], node_types: {}, directories: [] }; }
       return d;
