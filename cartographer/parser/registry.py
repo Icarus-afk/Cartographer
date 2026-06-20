@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 from cartographer.core.models import Language as ProgLang
 from cartographer.parser.base import BaseParser
@@ -8,7 +9,7 @@ from cartographer.parser.base import BaseParser
 logger = logging.getLogger(__name__)
 
 _PARSER_MAP: dict[ProgLang, type[BaseParser]] | None = None
-_PARSER_CACHE: dict[ProgLang, BaseParser] = {}
+_THREAD_LOCAL = threading.local()
 
 
 def _ensure_parsers() -> None:
@@ -61,12 +62,16 @@ def _ensure_parsers() -> None:
 
 def get_parser(language: ProgLang) -> BaseParser | None:
     _ensure_parsers()
-    if language in _PARSER_CACHE:
-        return _PARSER_CACHE[language]
+    cache = getattr(_THREAD_LOCAL, "parser_cache", None)
+    if cache is None:
+        cache = {}
+        _THREAD_LOCAL.parser_cache = cache
+    if language in cache:
+        return cache[language]
     cls = _PARSER_MAP.get(language)
     instance = cls(language) if cls else None
     if instance:
-        _PARSER_CACHE[language] = instance
+        cache[language] = instance
     return instance
 
 

@@ -116,7 +116,7 @@ def _walk(
     if _seen is None:
         _seen = set()
     try:
-        entries = list(root.iterdir())
+        entries = sorted(root.iterdir(), key=lambda e: e.name)
     except PermissionError:
         return files
 

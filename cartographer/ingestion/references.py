@@ -383,7 +383,7 @@ def extract_references(
 
         for imp in imp_imports:
             targets = _candidates_for_import(imp, source_lang, source_dir, all_rel, suffix_index, ext_map)
-            for target in targets:
+            for target in sorted(targets):
                 references.append({
                     "source": source_rel,
                     "target": target,

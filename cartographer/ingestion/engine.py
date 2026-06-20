@@ -210,6 +210,7 @@ def _parse_repository(
                 errors.append(f"Parse worker failed: {e}")
 
     logger.info("Parsing complete: %d/%d files parsed", len(parsed_files), total)
+    parsed_files.sort(key=lambda pf: pf.path)
     return parsed_files
 
 
