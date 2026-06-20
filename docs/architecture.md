@@ -607,7 +607,7 @@ Uses **Model Context Protocol** (MCP SDK 1.27.2) with FastMCP on stdio transport
 | `cartographer://repo/{name}` | Repository details + counts | Nodes, edges, embeddings |
 | `cartographer://node/{node_id}` | Single node with metadata | Name, type, file, metadata JSON |
 
-### Tools (8)
+### Tools (14)
 
 | Tool | Parameters | Description |
 |---|---|---|
@@ -618,9 +618,25 @@ Uses **Model Context Protocol** (MCP SDK 1.27.2) with FastMCP on stdio transport
 | `summarize` | repo?, db? | Repository statistics |
 | `architecture` | repo?, detect?, db? | Detect/retrieve architecture |
 | `similar` | target, repo?, limit?, db? | Semantic similarity |
-| `ask` | query, repo?, limit?, db? | Natural language Q&A |
+| `ask` | query, repo?, limit?, max_tokens?, db? | Natural language Q&A |
+| `graph_data` | repo?, limit?, offset?, dir?, expand_node_id?, db? | Export graph as JSON for visualization |
+| `index` | path, db? | Index a repository |
+| `context` | repo?, top_n?, max_tokens?, db? | Generate structured context package |
+| `update_index` | file_path, db? | Incrementally re-index a single file |
+| `delete_file` | file_path, db? | Remove a deleted file from the graph |
+| `db_info` | db? | Show database statistics |
 
 All tools return plain text formatted for LLM consumption.
+
+### Graph Data Tool
+
+The `graph_data` tool powers the VS Code interactive graph visualization. It uses **deterministic hub-based sampling** to select nodes:
+
+1. Computes degree (edge count) for all nodes via a CTE with O(n+m) performance
+2. Selects top-degree "hub" nodes (1/8 of limit)
+3. Expands to immediate neighbors of those hubs
+4. Fills remaining capacity with next-highest-degree nodes
+5. Orders results by `node_id` for deterministic output (same nodes every time)
 
 ---
 

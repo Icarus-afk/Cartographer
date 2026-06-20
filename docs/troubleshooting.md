@@ -287,6 +287,18 @@ If the interactive graph visualization shows "Showing 0 of N nodes":
 3. **Database path**: Verify the database contains indexed data with `Cartographer: Database Info` command
 4. **Reload window**: After installing a new version, use `Developer: Reload Window` to pick up changes
 
+### Graph panel shows blank or loading indefinitely
+
+If the graph panel opens but shows a blank screen or the loading spinner never goes away:
+
+1. **MCP timeout**: The VS Code extension has a 15-second timeout on graph data requests. If MCP hangs, it falls back to CLI automatically. Check the output channel for "MCP graph_data failed, falling back" messages
+2. **Large repository**: For repos with 50K+ nodes, the graph data query may be slow. The default limit is 400 nodes — increase or decrease via `.cartographer/config.json`:
+   ```json
+   {"graphLimit": 200}
+   ```
+3. **CLI fallback**: Test that CLI works directly: `cartographer graph-data -l 100`. If this works, the issue is MCP-related
+4. **Deterministic layout**: Graph nodes are selected by degree-weighted hub sampling, ordered by node ID. The same project will always show the same nodes
+
 ### Extension: "[object Object]s Graph" title
 
 If the graph panel title shows `[object Object]s Graph` instead of "Function Graph" etc., the entity type was not properly extracted from the tree view item. This was fixed in v0.1.0 — update the extension and reload VS Code.

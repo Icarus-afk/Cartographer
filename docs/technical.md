@@ -128,7 +128,7 @@ Repository
 |---|---|---|---|
 | Ingestion Engine | `cartographer/ingestion/` | Discover files, detect languages/frameworks, extract references, handle gitignore |
 | Parser Engine | `cartographer/parser/` | Tree-sitter AST extraction for 20 languages |
-| VS Code Extension | `editors/vscode/` | Repository intelligence in the editor |
+| VS Code Extension | `editors/vscode/` | Interactive D3.js graph, entity/repo trees, search, hover, file watcher (22 commands, MCP-first) |
 | Graph Engine | `cartographer/graph/` | Build and persist knowledge graph (nodes + edges) |
 | Embedding Engine | `cartographer/embedding/` | Generate 384-dim vector embeddings, numpy-batched similarity |
 | Architecture Engine | `cartographer/architecture/` | Detect layers, patterns, frameworks, dependency flows |
@@ -137,7 +137,7 @@ Repository
 | Query Planner | `cartographer/query/` | Classify intent (9 types), plan retrieval strategy |
 | Git Intelligence | `cartographer/git/` | Parse commits, authors, co-change analysis |
 | MCP Server | `cartographer/mcp/` | Expose 14 tools + 3 resources via Model Context Protocol |
-| CLI | `cartographer/cli.py` | Click-based command-line interface (16 commands) |
+| CLI | `cartographer/cli.py` | Click-based command-line interface (30 commands) |
 
 ---
 
@@ -537,6 +537,18 @@ PRAGMA foreign_keys=ON;
 ```
 
 A `connect()` context manager wraps `get_connection()` with automatic commit on success and rollback on exception, preventing connection leaks. Both the CLI and MCP server set the same PRAGMAs on every connection.
+
+### Deterministic Graph Visualization
+
+The `graph_data` tool powers the VS Code interactive graph. It uses **deterministic hub-based sampling** to select nodes:
+
+1. **Degree computation** — CTE with O(n+m) JOIN computes edge count for all nodes
+2. **Hub selection** — Top-1/8 of limit by degree (highest-connectivity nodes)
+3. **Neighbor expansion** — Immediate neighbors of hubs
+4. **Capacity fill** — Next-highest-degree nodes until limit reached
+5. **Deterministic ordering** — All results ordered by `node_id` (no `RANDOM()`)
+
+Thread-safe parser registry uses `threading.local()` for parallel indexing. File discovery uses sorted `iterdir()` for deterministic file ordering.
 
 ---
 

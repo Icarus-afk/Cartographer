@@ -282,14 +282,20 @@ Cartographer runs a full MCP server exposing 14 tools and 3 resources:
 
 ```
 Tools:
-  search      — Find nodes by name/type (returns entities with file paths)
-  impact      — Find all nodes that depend on a given node
-  neighbors   — Traverse the graph from a node (configurable depth)
-  path        — Shortest path between two nodes
-  summarize   — Repository-level statistics and type breakdowns
+  search       — Find nodes by name/type (returns entities with file paths)
+  impact       — Find all nodes that depend on a given node
+  neighbors    — Traverse the graph from a node (configurable depth)
+  path         — Shortest path between two nodes
+  summarize    — Repository-level statistics and type breakdowns
   architecture — Detect layers, frameworks, and patterns
-  similar     — Semantic similarity search (requires embed)
-  ask         — Natural language question answering
+  similar      — Semantic similarity search (requires embed)
+  ask          — Natural language question answering
+  graph_data   — Export graph as JSON for visualization (deterministic hub sampling)
+  index        — Index a repository
+  context      — Generate structured context package
+  update_index — Incrementally re-index a single file
+  delete_file  — Remove a deleted file from the graph
+  db_info      — Show database statistics
 
 Resources:
   cartographer://repos        — List all indexed repositories
@@ -422,7 +428,7 @@ npm install && npm run compile
 # Install the VSIX or copy to ~/.vscode/extensions/
 ```
 
-Features: entity tree, repository tree, D3 graph visualization, search results panel, status bar with live node/edge counts, hover provider.
+Features: entity tree, repository tree, D3.js interactive graph visualization (minimap, zoom controls, export SVG, label toggling, cluster by directory), search results panel, status bar with live node/edge counts, hover provider, file watcher with incremental re-indexing.
 
 ---
 
@@ -466,10 +472,10 @@ DEFINES edges dominate (60–70% of all edges). IMPORTS ~25% for Python/Java.
 | Storage efficiency | 310 bytes/node |
 | Graph query latency | 600–720 ms |
 | Semantic search speedup | 280x (numpy batch) |
-| MCP tools | 8 |
+| MCP tools | 14 |
 | MCP resources | 3 |
 | CLI commands | 26 |
-| VS Code extension commands | 15 |
+| VS Code extension commands | 17 |
 
 ---
 
