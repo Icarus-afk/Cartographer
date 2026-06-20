@@ -174,6 +174,7 @@ export function createGraphWebview(
     }
   });
 
+  panel.webview.html = getHtml(entityType, panel.webview, extensionUri);
   streamGraph();
   return panel;
 }
