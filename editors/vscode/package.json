@@ -7,7 +7,7 @@
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages", "Visualization", "Debuggers"],
-  "repository": { "type": "git", "url": "https://github.com/anomalyco/cartographer" },
+  "repository": { "type": "git", "url": "https://github.com/Icarus-afk/Cartographer.git" },
   "icon": "",
   "activationEvents": ["onLanguage:plaintext", "onStartupFinished"],
   "main": "./out/extension.js",

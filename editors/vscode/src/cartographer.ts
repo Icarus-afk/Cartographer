@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "child_process";
+import { spawn } from "child_process";
 import * as vscode from "vscode";
 import * as path from "path";
 import { McpClient } from "./mcpClient";
@@ -49,15 +49,37 @@ function findBin(): string {
   const cfg = vscode.workspace.getConfiguration("cartographer");
   const c = cfg.get<string>("binPath", "cartographer");
   if (c !== "cartographer") return c;
-  try {
-    const r = spawnSync("python3", ["-m", "cartographer", "version"], { encoding: "utf-8", timeout: 5000 });
-    if (r.status === 0) return "python3 -m cartographer";
-  } catch { /* ignore */ }
-  try {
-    const r = spawnSync("which", ["cartographer"], { encoding: "utf-8" });
-    if (r.status === 0 && r.stdout.trim()) return r.stdout.trim();
-  } catch { /* ignore */ }
   return "cartographer";
+}
+
+let _cachedBin: string | null = null;
+async function findBinAsync(): Promise<string> {
+  if (_cachedBin) return _cachedBin;
+  const cfg = vscode.workspace.getConfiguration("cartographer");
+  const c = cfg.get<string>("binPath", "cartographer");
+  if (c !== "cartographer") { _cachedBin = c; return c; }
+  try {
+    const r = await execAsync("python3", ["-m", "cartographer", "version"], 5000);
+    if (r.exitCode === 0) { _cachedBin = "python3 -m cartographer"; return _cachedBin; }
+  } catch { /* ignore */ }
+  try {
+    const r = await execAsync("which", ["cartographer"], 5000);
+    if (r.exitCode === 0 && r.stdout.trim()) { _cachedBin = r.stdout.trim(); return _cachedBin; }
+  } catch { /* ignore */ }
+  _cachedBin = "cartographer";
+  return _cachedBin;
+}
+
+function execAsync(bin: string, args: string[], timeout = 120_000): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+  return new Promise((resolve) => {
+    const child = spawn(bin, args, { timeout });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk: Buffer) => stdout += chunk.toString("utf-8"));
+    child.stderr?.on("data", (chunk: Buffer) => stderr += chunk.toString("utf-8"));
+    child.on("error", () => resolve({ stdout, stderr, exitCode: 1 }));
+    child.on("close", (code) => resolve({ stdout, stderr, exitCode: code }));
+  });
 }
 
 export class CartographerClient {
@@ -65,11 +87,13 @@ export class CartographerClient {
   private bin: string;
   private mcp: McpClient | null = null;
   private _projectRoot: string;
+  private _binPromise: Promise<string>;
 
   constructor(output: vscode.OutputChannel, projectRoot: string) {
     this.output = output;
     this._projectRoot = projectRoot;
     this.bin = findBin();
+    this._binPromise = findBinAsync();
   }
 
   get projectRoot(): string { return this._projectRoot; }
@@ -95,7 +119,8 @@ export class CartographerClient {
     if (this.mcp?.running) return;
     this.mcp = new McpClient(this.output);
     const dbPath = this.dbPath();
-    const parts = this.bin.split(/\s+/);
+    const bin = await this._binPromise;
+    const parts = bin.split(/\s+/);
     const args = [...parts.slice(1), "mcp", "start", "--db", dbPath];
     try {
       await this.mcp.start(parts[0], args);
@@ -117,10 +142,11 @@ export class CartographerClient {
     return cliFn();
   }
 
-  private exec(args: string[]): Promise<string> {
-    const parts = this.bin.split(/\s+/);
+  private async exec(args: string[]): Promise<string> {
+    const bin = await this._binPromise;
+    const parts = bin.split(/\s+/);
     const allArgs = [...parts.slice(1), ...args];
-    this.output.appendLine(`$ ${this.bin} ${args.join(" ")}`);
+    this.output.appendLine(`$ ${bin} ${args.join(" ")}`);
     return new Promise((resolve, reject) => {
       const env = { ...process.env, CARTOGRAPHER_DB: this.dbPath() };
       const child = spawn(parts[0], allArgs, { timeout: 120_000, env });
@@ -321,7 +347,7 @@ export class CartographerClient {
   async getRepos(): Promise<RepoInfo[]> {
     const db = this.dbPath();
     try {
-      const r = spawnSync("python3", ["-c",
+      const r = await execAsync("python3", ["-c",
         "import sqlite3,sys\n"
         + "c=sqlite3.connect(sys.argv[1])\n"
         + "rows=c.execute('''SELECT r.name,r.path,"
@@ -331,14 +357,14 @@ export class CartographerClient {
         + "c.close()\n"
         + "for n,p,nodes,edges in rows: print(f'{n}|{p}|{nodes}|{edges}')",
         db,
-      ], { encoding: "utf-8", timeout: 10000 });
-      if (r.status === 0) {
+      ], 10000);
+      if (r.exitCode === 0) {
         return r.stdout.trim().split("\n").filter(Boolean).map(line => {
           const [name, path, nodes, edges] = line.split("|");
           return { name, path, nodes: parseInt(nodes || "0"), edges: parseInt(edges || "0") };
         });
       }
-      throw new Error(r.stderr?.trim() || `exit ${r.status}`);
+      throw new Error(r.stderr?.trim() || `exit ${r.exitCode}`);
     } catch (e) {
       this.output.appendLine(`getRepos error: ${e}`);
       const s = await this.summarize();
@@ -408,7 +434,7 @@ export class CartographerClient {
   async dbInfo(): Promise<string> {
     const db = this.dbPath();
     try {
-      const r = spawnSync("python3", ["-c",
+      const r = await execAsync("python3", ["-c",
         "import sqlite3,sys,os\n"
         + "p=sys.argv[1]\n"
         + "s=os.path.getsize(p) if os.path.exists(p) else 0\n"
@@ -421,13 +447,13 @@ export class CartographerClient {
         + "c.close()\n"
         + "print(f'{r}|{n}|{e}|{em}|{cm}|{s}')",
         db,
-      ], { encoding: "utf-8", timeout: 10000 });
-      if (r.status === 0) {
+      ], 10000);
+      if (r.exitCode === 0) {
         const [repos, nodes, edges, embs, commits, size] = r.stdout.trim().split("|");
         const sz = this.fmtSize(parseInt(size || "0"));
         return `Database: ${db}\nSize: ${sz}\nRepositories: ${repos || "0"}\nNodes: ${nodes || "0"}\nEdges: ${edges || "0"}\nEmbeddings: ${embs || "0"}\nCommits: ${commits || "0"}`;
       }
-      return `DB info failed: ${r.stderr?.trim() || `exit ${r.status}`}`;
+      return `DB info failed: ${r.stderr?.trim() || `exit ${r.exitCode}`}`;
     } catch (e) { return `DB info error: ${e}`; }
   }
 

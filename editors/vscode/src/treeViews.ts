@@ -82,6 +82,7 @@ const ENTITY_ICONS: Record<string, string> = {
   module: "symbol-module",
   controller: "symbol-misc",
   service: "symbol-misc",
+  type_alias: "symbol-type-parameter",
 };
 
 export class EntityItem extends vscode.TreeItem {

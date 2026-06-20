@@ -10,6 +10,8 @@ let repoTree: RepoTreeProvider;
 let entityTree: EntityTreeProvider;
 let searchTree: SearchTreeProvider;
 let statusBar: vscode.StatusBarItem;
+let summaryCache: Map<string, { summary: any; time: number }> = new Map();
+const SUMMARY_CACHE_TTL = 30000; // 30 seconds
 
 export function activate(_ctx: vscode.ExtensionContext): void {
   ctx = _ctx;
@@ -200,22 +202,21 @@ export function activate(_ctx: vscode.ExtensionContext): void {
     updateStatusBar();
   }
   function isIgnored(filePath: string, root: string): boolean {
-    const rel = filePath.startsWith(root) ? filePath.slice(root.length) : filePath;
+    const rel = root && filePath.startsWith(root) ? filePath.slice(root.length) : filePath;
     const ignored = ["node_modules", ".git", ".cartographer", "__pycache__", "venv", ".venv", "dist", "build", ".next", "target"];
     for (const dir of ignored) {
-      if (rel.startsWith(`/${dir}`) || rel.startsWith(`${dir}`)) return true;
+      if (rel.startsWith(`/${dir}/`) || rel.startsWith(`${dir}/`) || rel.endsWith(`/${dir}`) || rel === dir) return true;
     }
     return false;
   }
   ctx.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(async (doc) => {
       if (doc.uri.scheme !== "file") return;
-      if (isIgnored(doc.fileName, "")) return;
       const c = clients.forUri(doc.uri);
       if (!c) return;
+      if (isIgnored(doc.fileName, c.projectRoot)) return;
       const cfg = readProjectConfig(c.projectRoot);
       if (cfg.autoReindex === false) return;
-      if (isIgnored(doc.fileName, c.projectRoot)) return;
       pendingChanges.set(doc.fileName, "+");
       scheduleReindex();
     }),
@@ -251,7 +252,13 @@ async function updateStatusBar(): Promise<void> {
   try {
     const active = clients.active();
     if (active) {
-      const s = await active.summarize();
+      const cached = summaryCache.get(active.projectRoot);
+      const now = Date.now();
+      let s = cached && (now - cached.time) < SUMMARY_CACHE_TTL ? cached.summary : null;
+      if (!s) {
+        s = await active.summarize();
+        if (s) summaryCache.set(active.projectRoot, { summary: s, time: now });
+      }
       if (s) {
         const ws = vscode.workspace.workspaceFolders
           ?.find(f => active.projectRoot.startsWith(f.uri.fsPath))?.name || s.name;

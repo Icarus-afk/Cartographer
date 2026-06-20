@@ -97,17 +97,18 @@ export class ClientManager {
     try { return await c.summarize(); } catch { return null; }
   }
 
-  /** Aggregate all folder summaries */
+  /** Aggregate all folder summaries (parallel) */
   async allSummaries(): Promise<{ folder: string; name: string; nodes: number; edges: number }[]> {
-    const results: { folder: string; name: string; nodes: number; edges: number }[] = [];
-    for (const { folder, client } of this.allFolders()) {
-      try {
+    const folders = this.allFolders();
+    const results = await Promise.allSettled(
+      folders.map(async ({ folder, client }) => {
         const s = await client.summarize();
-        if (s) {
-          results.push({ folder, name: s.name, nodes: s.total_nodes, edges: s.total_edges });
-        }
-      } catch { /* skip */ }
-    }
-    return results;
+        if (s) return { folder, name: s.name, nodes: s.total_nodes, edges: s.total_edges };
+        return null;
+      })
+    );
+    return results.filter((r): r is PromiseFulfilledResult<{ folder: string; name: string; nodes: number; edges: number }> =>
+      r.status === 'fulfilled' && r.value !== null
+    ).map(r => r.value);
   }
 }
