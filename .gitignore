@@ -24,7 +24,6 @@ venv/
 test/repos/
 
 # Project-specific
-results.json
 class
 opencode .
 .cartographer/
