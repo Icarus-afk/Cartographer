@@ -30,8 +30,9 @@
   <img src="https://img.shields.io/badge/tree--sitter-20%20languages-yellow.svg" alt="20 Languages">
   <img src="https://img.shields.io/badge/MCP-15%20tools-orange.svg" alt="15 MCP Tools">
   <img src="https://img.shields.io/badge/tests-73%20passed-brightgreen.svg" alt="73 Tests">
+  <img src="https://img.shields.io/badge/benchmark-22%20repos%20%7C%2025K%20files%20%7C%20247K%20nodes-orange.svg" alt="22 Repos">
   <img src="https://img.shields.io/badge/embedding-bge--small--en--v1.5-384--dim-purple.svg" alt="Embedding Model">
-  <img src="https://img.shields.io/badge/token--savings-90%25-red.svg" alt="90% Token Savings">
+  <img src="https://img.shields.io/badge/token--savings-99.99%25-red.svg" alt="99.99% Token Savings">
 </p>
 
 ---
@@ -203,7 +204,9 @@ Cartographer saves money for coding agents by replacing expensive file reads wit
 | Find dependents | grep + read 10+ files (~12K tokens) | `impact` (~300 tokens) | **97.5%** |
 | Architecture | Read configs + dirs (~15K tokens) | `architecture` (~500 tokens) | **96.7%** |
 
-A typical 5-turn agent session saves **~9,000 tokens** (~$0.045 GPT-4). Scale that to a team of 10 doing 20 sessions/day: **~$2,700/month saved**.
+Benchmarked against 22 real-world repos (25K files, 247K nodes, 498K edges across 17 languages). On a Django-sized codebase (2,356 files, 62K nodes): full dump costs $4.85 (Haiku) or $48.47 (GPT-4o) per query; Cartographer costs $0.00004 — **99.99% savings**. See [full benchmarks](docs/benchmarks.md).
+
+A typical 5-turn agent session saves **~96K tokens** (~$0.48 GPT-4). Scale that to a team of 10 doing 20 sessions/day: **~$28,800/month saved**.
 
 ### Configure your agent to save tokens
 
@@ -426,7 +429,7 @@ Tree-sitter language grammars are downloaded on demand when you index a file in 
 | [Architecture Deep Dive](docs/architecture.md) | How the system works internally |
 | [Technical Reference](docs/technical.md) | Comprehensive technical architecture |
 | [OpenCode Integration](docs/opencode.md) | Using Cartographer with AI coding assistants |
-| [Benchmarks](docs/benchmarks.md) | Performance data across 22 real-world repos |
+| [Benchmarks](docs/benchmarks.md) | Performance data: 25K files, 247K nodes, 498K edges across 22 real-world repos in 17 languages |
 | [Whitepaper](docs/whitepaper.md) | Full technical whitepaper |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
 

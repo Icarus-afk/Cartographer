@@ -24,7 +24,6 @@ venv/
 test/repos/
 
 # Project-specific
-notebooks/
 results.json
 class
 opencode .

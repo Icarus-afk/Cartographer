@@ -1323,8 +1323,9 @@ def delete_file(ctx, file_path):
     Deletes all nodes belonging to the file and re-embeds remaining nodes.
     """
     from pathlib import Path as _Path
-    from cartographer.graph.builder import delete_file_from_graph
+
     from cartographer.embedding.engine import generate_embeddings
+    from cartographer.graph.builder import delete_file_from_graph
     from cartographer.storage.connection import get_connection, init_schema
 
     db_path = ctx.obj["db_path"]

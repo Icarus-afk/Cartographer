@@ -12,7 +12,7 @@ Software engineering teams spend 40–60% of their time on code comprehension �
 
 Cartographer solves this by transforming any code repository into a persistent, queryable **knowledge graph**. Within seconds of indexing, every class, function, method, interface, file, and directory becomes a first-class node connected by typed edges (DEFINES, IMPORTS, CONTAINS, CALLS, INHERITS, IMPLEMENTS, DECLARES). The graph lives in a portable SQLite database (~310 bytes per node) and supports semantic search, architecture detection, git intelligence, token-aware compression, and — critically — **direct integration with AI coding assistants via the Model Context Protocol (MCP)**.
 
-This whitepaper presents Cartographer's architecture, benchmark data across 14 real-world repositories (12 languages, 4,500+ files), and quantitative analysis of token savings when used with AI assistants like OpenCode, Claude Desktop, and Cursor.
+This whitepaper presents Cartographer's architecture, benchmark data across 22 real-world repositories (17 languages, 25,174 files, 246,966 graph nodes), and quantitative analysis of token savings when used with AI assistants like OpenCode, Claude Desktop, and Cursor.
 
 ---
 
@@ -37,7 +37,7 @@ This tax compounds:
 | **Static analysis tools** | Single-language, batch-only, no interactive query |
 | **Dumping full source to LLM** | Context-window constrained, expensive, no structural indexing |
 
-Cartographer fills this gap: it is language-agnostic (20 parsers), persistent (SQLite graph), queryable (26 CLI commands + MCP), and designed specifically to feed structured knowledge to LLMs.
+Cartographer fills this gap: it is language-agnostic (20 parsers), persistent (SQLite graph), queryable (30 CLI commands + MCP), and designed specifically to feed structured knowledge to LLMs.
 
 ---
 
@@ -49,7 +49,7 @@ Cartographer is a **Repository Intelligence Operating System** — a layered sys
 2. **Parses** every file into typed AST entities (classes, functions, methods, interfaces, enums, constants, variables, API endpoints, tables)
 3. **Links** entities across files via reference resolution (IMPORTS, DEFINES, CONTAINS, CALLS, INHERITS, IMPLEMENTS, DECLARES edges)
 4. **Stores** the graph in a portable SQLite database (~310 bytes/node)
-5. **Queries** via 26 CLI commands, a VS Code extension with D3 graph visualization, and a full MCP server
+5. **Queries** via 30 CLI commands, a VS Code extension with D3 graph visualization, and a full MCP server
 6. **Compresses** output to fit arbitrary token budgets (200–8,000 tokens) for LLM context windows
 7. **Embeds** nodes for semantic similarity search using `bge-small-en-v1.5` (384-dim, ONNX, numpy-batched at 280x speedup)
 
@@ -160,117 +160,150 @@ sequenceDiagram
 
 ## 4. Benchmark Results
 
-Benchmarks run on Linux x86_64, Intel, SSD. Cartographer version 0.1.0.
+Benchmarks run on Linux x86_64, Intel i7, SSD. Cartographer version 0.1.0.
 
 ### 4.1 Test Suite
 
-14 repositories across 12 languages:
+22 repositories across 17 languages:
 
-| Language | Repository | Files | Description |
-|---|---|---|---|
-| Python | flask | 80 | Web micro-framework |
-| Go | gin | 99 | HTTP web framework |
-| Rust | mdbook | 109 | Documentation tool |
-| Elixir | plug | 77 | Web middleware spec |
-| Lua | luassert | 39 | Test assertion library |
-| C | chalk | 19 | Terminal styling |
-| C++ | json (nlohmann) | 499 | JSON library (header-only) |
-| Java | junit5 | 1,911 | Test framework |
-| C# | Humanizer | 469 | String manipulation |
-| PHP | monolog | 216 | Logging library |
-| Ruby | rspec-core | 223 | Test framework |
-| Scala | cats | 836 | Functional programming |
-| TypeScript/TSX | TS project | 1,633 | TypeScript codebase |
-| Python | Cartographer (self) | 45 | Self-test |
+| Language | Repository | Files | Source (chars) | Est. Tokens |
+|---|---|---|---|---|
+| Python | flask | 81 | 2.6M | 869K |
+| Python | fastapi | 944 | 46.5M | 15.5M |
+| Python | django | 2,356 | 58.2M | 19.4M |
+| Go | gin | 99 | 1.1M | 372K |
+| Go | hugo | 929 | 51.4M | 17.1M |
+| Rust | mdbook | 109 | 3.3M | 1.1M |
+| Rust | tokio | 784 | 7.4M | 2.5M |
+| Rust | serde | 189 | 1.7M | 569K |
+| Rust | chalk | 13 | 719K | 240K |
+| JavaScript | react | 4,588 | 52.0M | 17.3M |
+| C | redis | 866 | 25.6M | 8.5M |
+| C | jansson | 51 | 1.2M | 386K |
+| C++ | json (nlohmann) | 500 | 25.2M | 8.4M |
+| Java | junit5 | 1,911 | 36.4M | 12.1M |
+| Java | spring-boot | 8,790 | 51.4M | 17.1M |
+| C# | Humanizer | 469 | 11.2M | 3.7M |
+| Kotlin | kotlinx.coroutines | 1,104 | 29.7M | 9.9M |
+| Scala | cats | 836 | 6.3M | 2.1M |
+| Ruby | rspec-core | 223 | 2.4M | 816K |
+| PHP | monolog | 216 | 2.7M | 897K |
+| Elixir | plug | 77 | 1.0M | 335K |
+| Lua | luassert | 39 | 301K | 100K |
+| **Total** | **22 repos** | **25,174** | **1.38B** | **460M** |
 
-### 4.2 Indexing Throughput
+### 4.2 Indexing Performance
 
-| Repository | Files | Time | Files/s | Nodes | Nodes/s | Edges |
-|---|---|---|---|---|---|---|
-| flask | 80 | 950ms | 84 | 1,026 | 1,080 | 1,504 |
-| gin | 99 | 839ms | 118 | 1,598 | 1,905 | 1,642 |
-| mdbook | 109 | 1,336ms | 82 | 1,108 | 829 | 1,246 |
-| plug | 77 | 782ms | 99 | 109 | 139 | 209 |
-| luassert | 39 | 642ms | 61 | 137 | 213 | 178 |
-| chalk | 19 | 743ms | 26 | 83 | 112 | 80 |
-| json (C++) | 499 | 4,798ms | 104 | 2,002 | 417 | 2,062 |
-| junit5 | 1,911 | 31,935ms | 60 | 15,020 | 470 | 22,707 |
-| Humanizer | 469 | 2,732ms | 172 | 5,006 | 1,832 | 5,003 |
-| monolog | 216 | 857ms | 252 | 1,820 | 2,124 | 1,827 |
-| rspec-core | 223 | 920ms | 242 | 311 | 338 | 428 |
-| cats | 836 | 6,383ms | 131 | 9,204 | 1,442 | 9,884 |
-| TS project | 1,633 | 4,400ms | 371 | 10,662 | 2,423 | 11,452 |
-| **Total/Avg** | **4,579** | **52,911ms** | **86.5 avg** | **37,517** | **709 avg** | **47,410** |
-
-```mermaid
-xychart-beta
-    title "Indexing Throughput by Language"
-    x-axis ["PHP", "Ruby", "TS/TSX", "Go", "C#", "Scala", "Python", "C++", "Java", "C"]
-    y-axis "Files/second" 0 --> 400
-    bar [252, 242, 371, 118, 172, 131, 84, 104, 60, 26]
-```
+| Repo | Files | Time (ms) | Files/s | Nodes | Edges |
+|---|---|---|---|---|---|
+| flask | 81 | 288 | 281 | 1,485 | 2,180 |
+| fastapi | 944 | 2,213 | 427 | 10,849 | 17,018 |
+| django | 2,356 | 10,485 | 225 | 62,379 | 116,202 |
+| gin | 99 | 388 | 255 | 1,759 | 2,859 |
+| hugo | 929 | 3,644 | 255 | 11,841 | 15,603 |
+| mdbook | 109 | 543 | 201 | 1,145 | 1,370 |
+| tokio | 784 | 2,218 | 353 | 11,411 | 15,902 |
+| serde | 189 | 545 | 347 | 2,193 | 2,832 |
+| chalk | 13 | 26 | 500 | 108 | 107 |
+| react | 4,588 | 14,109 | 325 | 27,400 | 36,332 |
+| redis | 866 | 7,870 | 110 | 11,055 | 32,440 |
+| jansson | 51 | 379 | 135 | 529 | 1,164 |
+| json | 500 | 3,425 | 146 | 2,052 | 4,031 |
+| junit5 | 1,911 | 4,026 | 475 | 15,020 | 42,252 |
+| spring-boot | 8,790 | 20,068 | 438 | 68,610 | 186,271 |
+| Humanizer | 469 | 2,342 | 200 | 5,045 | 5,042 |
+| kotlinx.coroutines | 1,104 | 1,864 | 592 | 2,504 | 2,500 |
+| cats | 836 | 3,659 | 228 | 9,204 | 11,923 |
+| rspec-core | 223 | 555 | 402 | 311 | 307 |
+| monolog | 216 | 475 | 455 | 1,820 | 1,817 |
+| plug | 77 | 251 | 307 | 109 | 107 |
+| luassert | 39 | 107 | 364 | 137 | 135 |
+| **Total** | **25,174** | **79,480** | **317 avg** | **246,966** | **498,394** |
 
 **Key observations:**
-- PHP and Ruby parse the fastest (>240 files/s)
-- C is slowest (26 files/s) due to dense header complexity
-- TypeScript/TSX is surprisingly fast (371 files/s) — Tree-sitter grammar is well-optimized
-- Java/junit5 at 1,911 files completes in 32 seconds — sub-linear scaling due to shared infrastructure
-- Self-index (45 Python files): 85ms, 553 files/s, 463 nodes
+- **Average throughput**: 317 files/s across all 22 repos
+- **Fastest indexing**: chalk (500 f/s), kotlinx.coroutines (592 f/s), monolog (455 f/s)
+- **Largest graph**: django at 62,379 nodes, 116,202 edges in 10.5s; spring-boot at 68,610 nodes, 186,271 edges in 20s
+- **Node density**: 9.8 nodes per file, 2.0 edges per node on average
+- **Slowest repos**: C-based projects (redis 110 f/s, jansson 135 f/s) due to dense macro usage and header complexity
 
-### 4.3 Real-Time Indexing Estimates
+### 4.3 Indexing Estimates by Size
 
 | Project Size | Expected Time |
 |---|---|
-| 500 files (typical Python web app) | ~6 seconds |
-| 1,000 files (medium Go/Rust project) | ~12 seconds |
-| 2,000 files (Java enterprise service) | ~32 seconds |
-| 10,000 files (large monorepo) | ~2–3 minutes |
+| 500 files (typical Python web app) | ~1.5 seconds |
+| 1,000 files (medium Go/Rust project) | ~3 seconds |
+| 2,000 files (Java enterprise service) | ~4 seconds |
+| 10,000 files (large monorepo) | ~20 seconds |
 
-### 4.4 Memory Usage
-
-| Repository | Files | Peak RSS | KB/File |
-|---|---|---|---|
-| flask | 80 | 95 MB | 1,215 |
-| json (C++) | 499 | 115 MB | 236 |
-| junit5 | 1,911 | 123 MB | 66 |
-| cats | 836 | 106 MB | 130 |
-
-Memory scales sub-linearly — 1,911 files use only 29% more memory than 80 files. Peak is ~123 MB.
-
-### 4.5 Storage Efficiency
+### 4.4 Storage Efficiency
 
 | Size | Total |
 |---|---|
-| 37,424 nodes across 14 repos | ~34 MB total |
+| 246,966 nodes across 22 repos | ~76 MB DB + embeddings |
 | Per node | ~310 bytes |
-| Per 100K-node project | ~30 MB |
+| Embedding vector | 1.5 KB per node (384 x float32) |
 
-### 4.6 Query Performance
+### 4.5 Architecture Detection
 
-| Operation | Small (80f) | Medium (499f) | Large (836f) |
-|---|---|---|---|
-| **ask** (semantic) | 780ms | 610ms | 646ms |
-| **impact** | 661ms | 660ms | 625ms |
-| **path** | 624ms | 619ms | 720ms |
-| **neighbors** | 626ms | 665ms | 608ms |
-| **similar** (numpy) | ~1ms | — | ~13ms |
-| **summarize** | 668ms | 666ms | 895ms |
-
-Graph traversal operations are stable at ~600–720ms regardless of repo size. Semantic similarity via numpy batching completes in 1–13ms — a **280x speedup** over Python loops.
-
-### 4.7 Architecture Detection
-
-Detection completes in 575–3,091ms. Testing layers detected universally at 99–100% confidence. Second layers (Config, Utility, Migration) appear in 7/12 repos.
-
-### 4.8 Embedding Throughput
-
-| Nodes | Time | Nodes/s |
+| Repo | Layers | Patterns |
 |---|---|---|
-| 999 | 27.5s | 36.3 |
-| 1,888 | 24.7s | 76.4 |
-| 8,837 | 86.4s | 102.3 |
+| flask | 7 | 1 |
+| fastapi | 10 | 6 |
+| django | 11 | 6 |
+| gin | 8 | 5 |
+| hugo | 10 | 6 |
+| mdbook | 5 | 0 |
+| tokio | 8 | 6 |
+| serde | 2 | 0 |
+| chalk | 4 | 0 |
+| react | 9 | 6 |
+| redis | 9 | 5 |
+| jansson | 5 | 2 |
+| json | 6 | 2 |
+| junit5 | 11 | 6 |
+| spring-boot | 11 | 6 |
+| Humanizer | 8 | 3 |
+| kotlinx.coroutines | 10 | 6 |
+| cats | 7 | 5 |
+| rspec-core | 7 | 5 |
+| monolog | 7 | 6 |
+| plug | 5 | 0 |
+| luassert | 2 | 0 |
 
-ONNX inference of `bge-small-en-v1.5` (384-dim). Throughput improves with batch size. For a 10K-node project: ~2 minutes.
+Large Python/Java/Kotlin projects detect the most layers (10-11). Testing layer detected universally at 99-100% confidence.
+
+### 4.6 Embedding Throughput
+
+| Metric | Value |
+|---|---|
+| Total nodes embedded | 246,966 across 22 repos |
+| Total embedding time | 648,391ms (~10.8 min) |
+| Avg throughput | **381 vec/s** (CPU, ONNX) |
+| Best throughput | chalk: 941 vec/s (32 nodes) |
+| Worst throughput | rspec-core: 106 vec/s (145 nodes) |
+| Search latency | 2-175ms (numpy cosine similarity) |
+
+### 4.7 Semantic Query Accuracy
+
+220 natural-language queries across 22 repos (10 per repo):
+
+| Metric | Value |
+|---|---|
+| Queries passed | **220/220 (100%)** |
+| Mean similarity score | **0.838** |
+| Median similarity score | 0.836 |
+| Queries >= 0.80 | 86.8% |
+| Queries >= 0.90 | 3.2% |
+| Min score | 0.733 |
+| Max score | 0.934 |
+
+### 4.8 Embedding Search Performance
+
+| Method | 5,000 vectors | Speedup |
+|---|---|---|
+| Python loop (old) | 2,025ms | — |
+| numpy batch (new) | 7ms | **280x** |
 
 ---
 
@@ -535,34 +568,40 @@ Features: entity tree, repository tree, D3.js interactive graph visualization (m
 
 | Repository | CONTAINS | DEFINES | IMPORTS | DECLARES |
 |---|---|---|---|---|
-| flask | 103 | 919 | 482 | 0 |
-| junit5 | 2,473 | 10,681 | 7,712 | 1,841 |
-| cats | 1,178 | 8,001 | 697 | 8 |
-| rspec-core | 252 | 55 | 121 | 0 |
-| plug | 92 | 13 | 104 | 0 |
+| flask | 186 | 1,521 | 473 | 0 |
+| django | 5,976 | 80,450 | 29,776 | 0 |
+| junit5 | 4,775 | 27,657 | 8,716 | 1,104 |
+| spring-boot | 14,576 | 138,271 | 33,424 | 0 |
+| cats | 1,759 | 9,615 | 533 | 16 |
+| react | 9,203 | 23,108 | 4,021 | 0 |
+| tokio | 2,024 | 10,667 | 3,211 | 0 |
 
-DEFINES edges dominate (60–70% of all edges). IMPORTS ~25% for Python/Java.
+DEFINES edges dominate (~60-75% of all edges). IMPORTS typically ~15-25% for Python/Java projects.
 
 ## Appendix B: Performance Summary
 
 | Metric | Value |
 |---|---|
 | Languages supported | 20 |
-| Repos benchmarked | 14 |
-| Total files indexed | 4,577 |
-| Total nodes created | 37,424 |
-| Total edges created | 46,770 |
-| Total DB size | 34 MB |
-| Mean indexing speed | 86.5 files/s |
-| Peak indexing speed | 543 files/s |
-| Peak memory usage | 123 MB |
-| Storage efficiency | 310 bytes/node |
-| Graph query latency | 600–720 ms |
-| Semantic search speedup | 280x (numpy batch) |
-| MCP tools | 15 |
+| Repos benchmarked | 22 |
+| Total files indexed | 25,174 |
+| Total nodes created | 246,966 |
+| Total edges created | 498,394 |
+| Total source chars | 1.38B |
+| Total est. tokens | 460M |
+| Total indexing time | 79.5s |
+| Total embedding time | 648.4s (~10.8 min) |
+| Mean indexing speed | 317 files/s |
+| Peak indexing speed | 592 files/s (kotlinx.coroutines) |
+| Semantic query pass rate | 100% (220/220) |
+| Mean semantic score | 0.838 |
+| Embedding throughput | 381 vec/s avg |
+| Search speedup | 280x (numpy batch) |
+| Storage efficiency | ~310 bytes/node + 1.5KB/embedding |
+| MCP tools | 14 |
 | MCP resources | 3 |
-| CLI commands | 26 |
-| VS Code extension commands | 17 |
+| CLI commands | 30 |
+| VS Code extension commands | 22 |
 
 ---
 

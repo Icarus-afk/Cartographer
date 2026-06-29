@@ -628,8 +628,9 @@ def delete_file_tool(
     db: str | None = None,
 ) -> str:
     from pathlib import Path as _Path
-    from cartographer.graph.builder import delete_file_from_graph
+
     from cartographer.embedding.engine import generate_embeddings
+    from cartographer.graph.builder import delete_file_from_graph
     from cartographer.storage.connection import get_connection, init_schema
 
     db_path = _db(db)
