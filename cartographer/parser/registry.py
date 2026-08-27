@@ -16,29 +16,40 @@ def _ensure_parsers() -> None:
     global _PARSER_MAP
     if _PARSER_MAP is not None:
         return
-    from cartographer.parser.languages.c import CParser
-    from cartographer.parser.languages.cpp import CppParser
-    from cartographer.parser.languages.csharp import CSharpParser
-    from cartographer.parser.languages.dart import DartParser
-    from cartographer.parser.languages.elixir import ElixirParser
-    from cartographer.parser.languages.generic import GenericParser
-    from cartographer.parser.languages.go import GoParser
-    from cartographer.parser.languages.groovy import GroovyParser
-    from cartographer.parser.languages.java import JavaParser
-    from cartographer.parser.languages.javascript import JavaScriptParser
-    from cartographer.parser.languages.julia import JuliaParser
-    from cartographer.parser.languages.kotlin import KotlinParser
-    from cartographer.parser.languages.lua import LuaParser
-    from cartographer.parser.languages.markdown import MarkdownParser
-    from cartographer.parser.languages.php import PHPPhpParser
-    from cartographer.parser.languages.python import PythonParser
-    from cartographer.parser.languages.ruby import RubyParser
-    from cartographer.parser.languages.rust import RustParser
-    from cartographer.parser.languages.scala import ScalaParser
-    from cartographer.parser.languages.swift import SwiftParser
-    from cartographer.parser.languages.tsx import TSXParser
-    from cartographer.parser.languages.typescript import TypeScriptParser
-    from cartographer.parser.languages.zig import ZigParser
+    # import each parser in isolation — missing tree-sitter grammar falls back to GenericParser
+    from cartographer.parser.languages.generic import GenericParser as _Generic  # always available
+
+    def _try_import(mod: str, cls: str):
+        try:
+            m = __import__(mod, fromlist=[cls])
+            return getattr(m, cls)
+        except Exception as exc:
+            logger.warning("Parser %s.%s unavailable, falling back to generic: %s", mod, cls, exc)
+            return _Generic
+
+    CParser = _try_import("cartographer.parser.languages.c", "CParser")
+    CppParser = _try_import("cartographer.parser.languages.cpp", "CppParser")
+    CSharpParser = _try_import("cartographer.parser.languages.csharp", "CSharpParser")
+    DartParser = _try_import("cartographer.parser.languages.dart", "DartParser")
+    ElixirParser = _try_import("cartographer.parser.languages.elixir", "ElixirParser")
+    GenericParser = _Generic
+    GoParser = _try_import("cartographer.parser.languages.go", "GoParser")
+    GroovyParser = _try_import("cartographer.parser.languages.groovy", "GroovyParser")
+    JavaParser = _try_import("cartographer.parser.languages.java", "JavaParser")
+    JavaScriptParser = _try_import("cartographer.parser.languages.javascript", "JavaScriptParser")
+    JuliaParser = _try_import("cartographer.parser.languages.julia", "JuliaParser")
+    KotlinParser = _try_import("cartographer.parser.languages.kotlin", "KotlinParser")
+    LuaParser = _try_import("cartographer.parser.languages.lua", "LuaParser")
+    MarkdownParser = _try_import("cartographer.parser.languages.markdown", "MarkdownParser")
+    PHPPhpParser = _try_import("cartographer.parser.languages.php", "PHPPhpParser")
+    PythonParser = _try_import("cartographer.parser.languages.python", "PythonParser")
+    RubyParser = _try_import("cartographer.parser.languages.ruby", "RubyParser")
+    RustParser = _try_import("cartographer.parser.languages.rust", "RustParser")
+    ScalaParser = _try_import("cartographer.parser.languages.scala", "ScalaParser")
+    SwiftParser = _try_import("cartographer.parser.languages.swift", "SwiftParser")
+    TSXParser = _try_import("cartographer.parser.languages.tsx", "TSXParser")
+    TypeScriptParser = _try_import("cartographer.parser.languages.typescript", "TypeScriptParser")
+    ZigParser = _try_import("cartographer.parser.languages.zig", "ZigParser")
     _PARSER_MAP = {
         ProgLang.PYTHON: PythonParser,
         ProgLang.JAVASCRIPT: JavaScriptParser,

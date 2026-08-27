@@ -172,15 +172,41 @@ def build_graph(
 
     _resolve_relationships(parsed_files, name_to_entity_ids, stats, _batch_edge)
 
-    conn.executemany(
-        "INSERT INTO nodes (id, repository_id, node_type, name, file_path, metadata_json) "
-        "VALUES (?, ?, ?, ?, ?, ?)", node_rows,
-    )
-    conn.executemany(
-        "INSERT INTO edges (id, repository_id, source_node_id, target_node_id, edge_type) "
-        "VALUES (?, ?, ?, ?, ?)", edge_rows,
-    )
-    conn.commit()
+    # chunked inserts to avoid huge transactions and SQLITE_BUSY
+    CHUNK = 1000
+    try:
+        for i in range(0, len(node_rows), CHUNK):
+            conn.executemany(
+                "INSERT INTO nodes (id, repository_id, node_type, name, file_path, metadata_json) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                node_rows[i : i + CHUNK],
+            )
+        for i in range(0, len(edge_rows), CHUNK):
+            conn.executemany(
+                "INSERT INTO edges (id, repository_id, source_node_id, target_node_id, edge_type) "
+                "VALUES (?, ?, ?, ?, ?)",
+                edge_rows[i : i + CHUNK],
+            )
+        # retry commit on busy
+        for attempt in range(3):
+            try:
+                conn.commit()
+                break
+            except sqlite3.OperationalError as exc:
+                if "busy" in str(exc).lower() and attempt < 2:
+                    import time as _t
+
+                    _t.sleep(0.2 * (attempt + 1))
+                    continue
+                raise
+    except Exception as exc:
+        logger.warning("Graph build commit failed: %s — rolling back", exc)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        conn.close()
+        raise
     conn.close()
     return stats  # type: ignore[return-value]
 

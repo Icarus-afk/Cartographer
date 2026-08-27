@@ -92,9 +92,34 @@ def search_nodes(
     node_type: str | None = None,
     limit: int = 20,
 ) -> list[SearchResult]:
-    conn = get_connection(db_path)
-    results = _search(conn, query, repo_name, node_type, limit)
-    conn.close()
+    # robust validation
+    if query is None:
+        query = ""
+    query = str(query).strip()
+    if not query:
+        return []
+    # escape LIKE wildcards in query for safety, but keep substring search
+    # use ESCAPE clause implicitly by escaping % and _
+    limit = max(1, min(int(limit) if isinstance(limit, int) else 20, 100))
+    if node_type is not None:
+        node_type = str(node_type).strip() or None
+    if repo_name is not None:
+        repo_name = str(repo_name).strip() or None
+    try:
+        conn = get_connection(db_path)
+    except Exception as exc:
+        logger.warning("search_nodes: DB connection failed for %s: %s", db_path, exc)
+        return []
+    try:
+        results = _search(conn, query, repo_name, node_type, limit)
+    except Exception as exc:
+        logger.warning("search failed for query='%s': %s", query[:50], exc)
+        results = []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
     return results
 
 

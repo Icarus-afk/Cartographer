@@ -40,29 +40,73 @@ def _get_model() -> TextEmbedding:
     if _model is None:
         with _model_lock:
             if _model is None:
-                kwargs: dict[str, Any] = {}
-                if EMBEDDING_PARALLELISM > 0:
-                    kwargs["parallelism"] = EMBEDDING_PARALLELISM
-                _model = TextEmbedding(EMBEDDING_MODEL, **kwargs)
-    return _model
+                last_exc: Exception | None = None
+                for attempt in range(3):
+                    try:
+                        kwargs: dict[str, Any] = {}
+                        if EMBEDDING_PARALLELISM > 0:
+                            kwargs["parallelism"] = EMBEDDING_PARALLELISM
+                        _model = TextEmbedding(EMBEDDING_MODEL, **kwargs)
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                        logger.warning("Embedding model load failed (attempt %d/3): %s", attempt + 1, exc)
+                        if attempt < 2:
+                            import time as _t
+
+                            _t.sleep(2**attempt)
+                if _model is None and last_exc is not None:
+                    raise last_exc
+    return _model  # type: ignore[return-value]
 
 
 def _build_node_text(name: str, node_type: str, file_path: str, metadata: dict[str, Any]) -> str:
     parts = [f"{node_type}: {name}"]
     if file_path:
         parts.append(f"file: {file_path}")
+        # include directory context for better semantics
+        try:
+            dir_part = "/".join(file_path.split("/")[:-1])
+            if dir_part:
+                parts.append(f"directory: {dir_part}")
+        except Exception:
+            pass
     if metadata.get("docstring"):
-        parts.append(f"docstring: {metadata['docstring']}")
-    if node_type in ("function", "method") and metadata.get("signature"):
+        doc = str(metadata["docstring"]).strip()
+        if len(doc) > 500:
+            doc = doc[:500] + "…"
+        parts.append(f"docstring: {doc}")
+    # signature / parameters / types
+    if metadata.get("signature"):
         parts.append(f"signature: {metadata['signature']}")
-    if node_type == "method" and metadata.get("parent_name"):
-        parts.append(f"parent: {metadata['parent_name']}")
-    if node_type == "function" and metadata.get("parent_name"):
-        parts.append(f"module: {metadata['parent_name']}")
     if metadata.get("parameters"):
-        parts.append(f"parameters: {', '.join(metadata['parameters'])}")
+        try:
+            params = metadata["parameters"]
+            if isinstance(params, (list, tuple)):
+                parts.append(f"parameters: {', '.join(str(p) for p in params[:10])}")
+            else:
+                parts.append(f"parameters: {params}")
+        except Exception:
+            pass
     if metadata.get("return_type"):
         parts.append(f"returns: {metadata['return_type']}")
+    if metadata.get("decorators"):
+        dec = str(metadata["decorators"]).strip()
+        if dec:
+            parts.append(f"decorators: {dec[:200]}")
+    if metadata.get("bases"):
+        try:
+            bases = metadata["bases"]
+            if isinstance(bases, (list, tuple)) and bases:
+                parts.append(f"bases: {', '.join(str(b) for b in bases[:5])}")
+        except Exception:
+            pass
+    # parent/module context
+    if metadata.get("parent_name"):
+        key = "parent" if node_type == "method" else "module"
+        parts.append(f"{key}: {metadata['parent_name']}")
+    if metadata.get("language"):
+        parts.append(f"language: {metadata['language']}")
     return "\n".join(parts)
 
 
@@ -120,13 +164,52 @@ def _load_vectors(
     if not rows:
         return np.empty((0, EMBEDDING_DIM), dtype=np.float32), [], np.empty(0, dtype=np.float32)
 
-    blobs = [r[4] for r in rows]
-    vectors = np.frombuffer(b"".join(blobs), dtype=np.float32).reshape(len(rows), EMBEDDING_DIM)
+    # filter corrupted blobs (must be EMBEDDING_DIM*4 bytes)
+    valid_rows: list = []
+    blobs: list[bytes] = []
+    for r in rows:
+        blob = r[4]
+        if isinstance(blob, (bytes, bytearray)) and len(blob) == EMBEDDING_DIM * 4:
+            valid_rows.append(r)
+            blobs.append(bytes(blob))
+        else:
+            logger.debug("Skipping corrupted embedding for node %s (size %s)", r[0], len(blob) if isinstance(blob, (bytes, bytearray)) else type(blob))
+            # try to recover: if blob is wrong size but divisible, skip
+            continue
+    if not valid_rows:
+        return np.empty((0, EMBEDDING_DIM), dtype=np.float32), [], np.empty(0, dtype=np.float32)
+    # for very large repos, warn if >100k vectors
+    if len(valid_rows) > 100000:
+        logger.warning("Large embedding set (%d vectors) — consider per-repo search", len(valid_rows))
+    try:
+        vectors = np.frombuffer(b"".join(blobs), dtype=np.float32).reshape(len(valid_rows), EMBEDDING_DIM)
+    except Exception as exc:
+        logger.warning("Vector assembly failed: %s — falling back to per-row", exc)
+        # fallback: build incrementally, skipping bad rows
+        vecs = []
+        recs = []
+        for r, b in zip(valid_rows, blobs):
+            try:
+                v = np.frombuffer(b, dtype=np.float32)
+                if v.shape[0] == EMBEDDING_DIM:
+                    vecs.append(v)
+                    recs.append(r)
+            except Exception:
+                continue
+        if not vecs:
+            return np.empty((0, EMBEDDING_DIM), dtype=np.float32), [], np.empty(0, dtype=np.float32)
+        vectors = np.stack(vecs)
+        valid_rows = recs
     records = [
         {"id": r[0], "name": r[1], "type": r[2], "file_path": r[3]}
-        for r in rows
+        for r in valid_rows
     ]
-    norms = np.linalg.norm(vectors, axis=1)
+    try:
+        norms = np.linalg.norm(vectors, axis=1)
+        # guard against zero norms
+        norms = np.where(norms == 0, 1, norms)
+    except Exception:
+        norms = np.ones(len(vectors), dtype=np.float32)
 
     with _vector_cache_lock:
         if cache_key not in _vector_cache:
@@ -143,8 +226,13 @@ def generate_embeddings(
 ) -> tuple[int, int]:
     invalidate_cache(db_path, repo_name)
     from cartographer.storage.connection import get_connection
+
+    try:
+        model = _get_model()
+    except Exception as exc:
+        logger.error("Embedding model unavailable: %s — skipping embeddings", exc)
+        return 0, 0
     conn = get_connection(db_path)
-    model = _get_model()
 
     repo_filter = ""
     params: list[str] = []
@@ -182,8 +270,12 @@ def generate_embeddings(
     total_embeddable = total_row[0] if total_row else 0
     skip_count = total_embeddable - len(rows)
 
-    texts: list[str] = []
-    node_ids: list[int] = []
+    # chunked processing to avoid OOM on large repos (~100k nodes)
+    CHUNK = 500
+    total_embedded = 0
+    # prepare all texts first (still in memory but smaller than vectors)
+    all_texts: list[str] = []
+    all_ids: list[int] = []
     for row in tqdm(rows, desc="Preparing texts", unit="node"):
         node_id, name, node_type, file_path, metadata_json, _ = row
         metadata = {}
@@ -192,25 +284,38 @@ def generate_embeddings(
                 metadata = json.loads(metadata_json)
             except (json.JSONDecodeError, TypeError) as e:
                 logger.debug("Failed to parse metadata for node %d: %s", node_id, e)
-        texts.append(_build_node_text(name, node_type, file_path, metadata))
-        node_ids.append(node_id)
+        all_texts.append(_build_node_text(name, node_type, file_path, metadata))
+        all_ids.append(node_id)
 
-    vectors = list(tqdm(
-        model.embed(texts, batch_size=EMBEDDING_BATCH_SIZE),
-        desc="Embedding", total=len(texts), unit="vec",
-    ))
+    # embed in chunks to limit memory and allow incremental DB commits
+    for start in tqdm(range(0, len(all_texts), CHUNK), desc="Embedding chunks", unit="chunk"):
+        chunk_texts = all_texts[start : start + CHUNK]
+        chunk_ids = all_ids[start : start + CHUNK]
+        try:
+            chunk_vectors = list(model.embed(chunk_texts, batch_size=EMBEDDING_BATCH_SIZE))
+        except Exception as exc:
+            logger.warning("Embedding chunk %d failed: %s — skipping", start // CHUNK, exc)
+            continue
+        try:
+            conn.executemany(
+                "INSERT OR IGNORE INTO embeddings (node_id, model, vector) VALUES (?, ?, ?)",
+                [
+                    (nid, EMBEDDING_MODEL, np.array(vec, dtype=np.float32).tobytes())
+                    for nid, vec in zip(chunk_ids, chunk_vectors)
+                ],
+            )
+            conn.commit()
+            total_embedded += len(chunk_ids)
+        except Exception as exc:
+            logger.warning("DB insert failed for chunk %d: %s", start // CHUNK, exc)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
-    conn.executemany(
-        "INSERT OR IGNORE INTO embeddings (node_id, model, vector) VALUES (?, ?, ?)",
-        [
-            (node_id, EMBEDDING_MODEL, np.array(vector, dtype=np.float32).tobytes())
-            for node_id, vector in zip(node_ids, vectors)
-        ],
-    )
-    conn.commit()
     conn.close()
 
-    return len(node_ids), skip_count
+    return total_embedded, skip_count
 
 
 def embed_nodes(
@@ -266,9 +371,14 @@ def embed_nodes(
 
 @lru_cache(maxsize=128)
 def _encode_query(query: str) -> bytes:
-    model = _get_model()
-    vec = np.array(list(model.embed([query]))[0], dtype=np.float32)
-    return vec.tobytes()
+    try:
+        model = _get_model()
+        vec = np.array(list(model.embed([query]))[0], dtype=np.float32)
+        return vec.tobytes()
+    except Exception as exc:
+        logger.warning("Query encode failed for '%s': %s", query[:50], exc)
+        # fallback: zero vector (will yield empty results, caller handles)
+        return np.zeros(EMBEDDING_DIM, dtype=np.float32).tobytes()
 
 
 def similarity_search(
@@ -277,27 +387,76 @@ def similarity_search(
     limit: int = 20,
     repo_name: str | None = None,
 ) -> list[dict[str, Any]]:
-    query_vec = np.frombuffer(_encode_query(query), dtype=np.float32)
-    query_norm = np.linalg.norm(query_vec)
+    if not query or not query.strip():
+        return []
+    limit = max(1, min(int(limit) if isinstance(limit, int) else 20, 100))
+    try:
+        query_vec = np.frombuffer(_encode_query(query), dtype=np.float32)
+    except Exception:
+        return []
+    try:
+        query_norm = np.linalg.norm(query_vec)
+    except Exception:
+        return []
     if query_norm == 0:
         return []
 
-    vectors, records, norms = _load_vectors(db_path, repo_name)
+    try:
+        vectors, records, norms = _load_vectors(db_path, repo_name)
+    except Exception as exc:
+        logger.warning("Load vectors failed: %s", exc)
+        return []
     if len(vectors) == 0:
+        # fallback: no embeddings yet — return empty so caller can hint to run embed
         return []
 
-    scores = (vectors @ query_vec) / (norms * query_norm)
+    try:
+        scores = (vectors @ query_vec) / (norms * query_norm)
+        # sanitize NaN
+        scores = np.nan_to_num(scores, nan=0.0)
+    except Exception as exc:
+        logger.warning("Score computation failed: %s", exc)
+        return []
+
+    # hybrid boost: if top score is low (<0.35), blend with keyword overlap for better recall
+    try:
+        top_raw = float(np.max(scores)) if len(scores) else 0.0
+        if top_raw < 0.35:
+            q_words = set(query.lower().split())
+            if q_words:
+                for i, rec in enumerate(records):
+                    name_words = set((rec.get("name") or "").lower().split())
+                    file_words = set((rec.get("file_path") or "").lower().split("/"))
+                    overlap = len(q_words & (name_words | file_words))
+                    if overlap:
+                        scores[i] += 0.1 * overlap  # small boost
+    except Exception:
+        pass
 
     top_k = min(limit, len(scores))
-    top_indices = np.argpartition(-scores, top_k)[:top_k]
-    top_order = top_indices[np.argsort(-scores[top_indices])]
+    if top_k <= 0:
+        return []
+    try:
+        top_indices = np.argpartition(-scores, top_k - 1)[:top_k]
+        top_order = top_indices[np.argsort(-scores[top_indices])]
+    except Exception:
+        # fallback to sorted
+        top_order = np.argsort(-scores)[:top_k]
 
     results: list[dict[str, Any]] = []
     for idx in top_order:
-        rec = dict(records[idx])
-        rec["similarity"] = round(float(scores[idx]), 4)
-        rec["repo_name"] = repo_name or ""
-        results.append(rec)
+        try:
+            rec = dict(records[int(idx)])
+            rec["similarity"] = round(float(scores[int(idx)]), 4)
+            rec["repo_name"] = repo_name or ""
+            results.append(rec)
+        except Exception:
+            continue
+    # filter very low similarity (<0.15) to avoid noise, but keep at least 3 results
+    if len(results) > 3:
+        filtered = [r for r in results if r.get("similarity", 0) >= 0.15]
+        if filtered:
+            results = filtered
     return results
 
 

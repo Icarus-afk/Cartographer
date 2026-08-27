@@ -27,10 +27,20 @@ def _count_error_nodes(node: Node) -> tuple[int, int]:
     return error_count, missing_count
 
 
+MAX_FILE_SIZE = 1024 * 1024  # 1 MiB — larger files are truncated with warning
+MAX_SOURCE_BYTES = 2 * 1024 * 1024  # hard cap for tree-sitter
+
+
 class BaseParser(ABC):
     def __init__(self, language: ProgLang) -> None:
         self._lang = language
-        self._parser = Parser(self._build_language())
+        try:
+            self._parser = Parser(self._build_language())
+        except Exception as exc:  # graceful fallback if tree-sitter language missing
+            import logging
+
+            logging.getLogger(__name__).warning("Parser init failed for %s: %s", language, exc)
+            self._parser = None  # type: ignore[assignment]
 
     @abstractmethod
     def _build_language(self) -> Language: ...
@@ -42,8 +52,27 @@ class BaseParser(ABC):
     def parse_file(self, path: Path) -> tuple[bytes | None, list[str]]:
         errors: list[str] = []
         try:
+            try:
+                size = path.stat().st_size
+            except Exception:
+                size = 0
+            if size > MAX_FILE_SIZE:
+                errors.append(f"Parse warning: large file ({size} bytes) in {path.name}: truncated to {MAX_FILE_SIZE}")
             source = path.read_bytes()
-            tree = self._parser.parse(source)
+            if len(source) > MAX_SOURCE_BYTES:
+                errors.append(f"Parse warning: file exceeds hard cap ({len(source)} bytes) in {path.name}")
+                source = source[:MAX_SOURCE_BYTES]
+            # quick binary check
+            if b"\x00" in source[:8192]:
+                errors.append(f"Parse skipped binary file {path.name}")
+                return None, errors
+            if self._parser is None:
+                return source, errors
+            try:
+                tree = self._parser.parse(source)
+            except Exception as exc:
+                errors.append(f"Tree-sitter crash in {path.name}: {exc}")
+                return source, errors
             if tree and tree.root_node.has_error:
                 error_nodes, missing = _count_error_nodes(tree.root_node)
                 if tree.root_node.type == "ERROR":
@@ -83,7 +112,10 @@ class BaseParser(ABC):
             self._extract_calls(child, source, relationships)
 
     def _node_text(self, node: Node, source: bytes) -> str:
-        return source[node.start_byte : node.end_byte].decode("utf-8")
+        try:
+            return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+        except Exception:
+            return source[node.start_byte : node.end_byte].decode("utf-8", errors="ignore")
 
     def _location_from_node(self, node: Node) -> dict:
         return {

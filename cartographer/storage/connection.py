@@ -11,13 +11,31 @@ DEFAULT_DB_PATH = Path.home() / ".cartographer" / "index.db"
 def get_connection(db_path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    # retry on busy/locked for concurrent writers (watch + MCP + CLI)
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=10.0, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA cache_size=-8000")
+            conn.execute("PRAGMA temp_store=MEMORY")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA foreign_keys=ON")
+            return conn
+        except sqlite3.OperationalError as exc:
+            last_exc = exc
+            if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+                import time as _t
+
+                _t.sleep(0.2 * (attempt + 1))
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+    # fallback (should not reach)
+    conn = sqlite3.connect(str(db_path), timeout=10.0, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA cache_size=-8000")
-    conn.execute("PRAGMA temp_store=MEMORY")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 

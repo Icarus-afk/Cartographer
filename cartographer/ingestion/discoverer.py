@@ -68,6 +68,9 @@ def _load_gitignore_spec(root: Path) -> pathspec.PathSpec | None:
     return None
 
 
+MAX_DISCOVER_FILE_BYTES = 10 * 1024 * 1024  # skip files >10 MiB during discovery
+
+
 def _is_binary(path: Path) -> bool:
     ext = path.suffix.lower()
     if ext in BINARY_EXTENSIONS:
@@ -75,6 +78,13 @@ def _is_binary(path: Path) -> bool:
     if ext in TEXT_EXTENSIONS:
         return False
     try:
+        # skip huge files early without reading full
+        try:
+            if path.stat().st_size > MAX_DISCOVER_FILE_BYTES:
+                logger.debug("Skipping large file %s (>10MiB)", path)
+                return True
+        except Exception:
+            pass
         with open(path, "rb") as f:
             head = f.read(8192)
         return b"\0" in head

@@ -111,7 +111,7 @@ def index_repository(
     elapsed = (time.perf_counter() - start) * 1000
 
     fatal_errors = [e for e in errors if not (
-        e.startswith("Parse ") or e.startswith("Failed to parse")
+        e.startswith("Parse") or e.startswith("Failed to parse") or "large" in e.lower() or "truncated" in e.lower()
     )]
     return IngestionResult(
         path=str(root),
@@ -181,48 +181,76 @@ def _detect_lang_for_file(f: Path, ext_map: dict[Language, tuple[str, ...]]) -> 
     return CORE_EXT.get(ext, Language.UNKNOWN)
 
 
+MAX_FILE_BYTES_FOR_PARSE = 2 * 1024 * 1024  # skip or truncate beyond 2 MiB
+
+
 def _parse_single_file(
     args: tuple[Path, Path, dict[Language, tuple[str, ...]]],
 ) -> tuple[ParsedFile | None, list[str]]:
     f, root, ext_map = args
-    lang = _detect_lang_for_file(f, ext_map)
-    if lang == Language.UNKNOWN:
-        from cartographer.core.models import LANGUAGE_EXTENSIONS as CORE_EXT
-
-        lang = CORE_EXT.get(f.suffix.lower(), Language.UNKNOWN)
+    try:
+        try:
+            size = f.stat().st_size
+            if size > 10 * 1024 * 1024:
+                return None, [f"Parse skipped large file {f.name}: {size} bytes > 10MiB"]
+            if size > MAX_FILE_BYTES_FOR_PARSE:
+                logger.debug("Large file %s (%d bytes) will be truncated for parsing", f, size)
+        except Exception:
+            pass
+        lang = _detect_lang_for_file(f, ext_map)
         if lang == Language.UNKNOWN:
+            from cartographer.core.models import LANGUAGE_EXTENSIONS as CORE_EXT
+
+            lang = CORE_EXT.get(f.suffix.lower(), Language.UNKNOWN)
+            if lang == Language.UNKNOWN:
+                try:
+                    from cartographer.parser.languages.generic import GenericParser
+
+                    lang = Language.UNKNOWN
+                    parser = GenericParser(lang)
+                    source, parse_errors = parser.parse_file(f)
+                    if source:
+                        try:
+                            entities = parser.extract_entities(source, str(f.relative_to(root)))
+                        except Exception as exc:
+                            return None, [f"Generic extract failed for {f}: {exc}"]
+                        pf = ParsedFile(path=str(f.relative_to(root)), language=lang, entities=entities)
+                        return pf, parse_errors
+                    return None, parse_errors
+                except Exception:
+                    return None, []
+            if lang == Language.UNKNOWN:
+                return None, []
+        parser = get_parser(lang)
+        if not parser:
             try:
                 from cartographer.parser.languages.generic import GenericParser
 
-                lang = Language.UNKNOWN
                 parser = GenericParser(lang)
-                source, parse_errors = parser.parse_file(f)
-                if source:
-                    entities = parser.extract_entities(source, str(f.relative_to(root)))
-                    pf = ParsedFile(path=str(f.relative_to(root)), language=lang, entities=entities)
-                    return pf, parse_errors
-                return None, parse_errors
             except Exception:
                 return None, []
-        if lang == Language.UNKNOWN:
-            return None, []
-    parser = get_parser(lang)
-    if not parser:
         try:
-            from cartographer.parser.languages.generic import GenericParser
+            source, parse_errors = parser.parse_file(f)
+            if source:
+                try:
+                    entities = parser.extract_entities(source, str(f.relative_to(root)))
+                except Exception as exc:
+                    # fallback to generic parser on crash
+                    try:
+                        from cartographer.parser.languages.generic import GenericParser
 
-            parser = GenericParser(lang)
-        except Exception:
-            return None, []
-    try:
-        source, parse_errors = parser.parse_file(f)
-        if source:
-            entities = parser.extract_entities(source, str(f.relative_to(root)))
-            pf = ParsedFile(path=str(f.relative_to(root)), language=lang, entities=entities)
-            return pf, parse_errors
-        return None, parse_errors
-    except Exception as e:
-        return None, [f"Parse error {f}: {e}"]
+                        g = GenericParser(lang)
+                        entities = g.extract_entities(source, str(f.relative_to(root)))
+                        parse_errors.append(f"Fallback generic for {f.name}: {exc}")
+                    except Exception:
+                        return None, [f"Extract failed for {f}: {exc}"]
+                pf = ParsedFile(path=str(f.relative_to(root)), language=lang, entities=entities)
+                return pf, parse_errors
+            return None, parse_errors
+        except Exception as e:
+            return None, [f"Parse error {f}: {e}"]
+    except Exception as e:  # ultimate isolation
+        return None, [f"Unhandled parse failure {f}: {e}"]
 
 
 def _parse_repository(
@@ -251,12 +279,25 @@ def _parse_repository(
             if done % max(1, total // 10) == 0 or done == total:
                 logger.info("  parsed %d/%d files...", done, total)
             try:
-                pf, parse_errors = future.result()
+                try:
+                    pf, parse_errors = future.result(timeout=30)
+                except TimeoutError:
+                    args = futures[future]
+                    f = args[0]
+                    errors.append(f"Parse timeout for {f}: >30s, skipped")
+                    # cancel if possible
+                    future.cancel()
+                    continue
                 if pf:
                     parsed_files.append(pf)
                 errors.extend(parse_errors)
             except Exception as e:
-                errors.append(f"Parse worker failed: {e}")
+                # isolate individual file crash
+                try:
+                    f = futures[future][0]
+                    errors.append(f"Parse worker failed for {f}: {e}")
+                except Exception:
+                    errors.append(f"Parse worker failed: {e}")
 
     logger.info("Parsing complete: %d/%d files parsed", len(parsed_files), total)
     parsed_files.sort(key=lambda pf: pf.path)
