@@ -720,6 +720,78 @@ def _collect_evidence(
         if lower.endswith((".proto",)):
             _add_evidence("api", "file_naming", fpath, "protobuf api", 0.7)
 
+    # 10. Import-graph evidence — boost layers that participate in expected flows
+    # Uses file-level IMPORTS edges to reinforce directory/class signals.
+    # This fixes non-standard layouts where filenames are generic (e.g. lib/src/foo.dart).
+    try:
+        import_edges = conn.execute(
+            """SELECT n1.file_path, n2.file_path
+               FROM edges e
+               JOIN nodes n1 ON e.source_node_id = n1.id
+               JOIN nodes n2 ON e.target_node_id = n2.id
+               WHERE e.edge_type = 'IMPORTS' AND e.repository_id = ?
+               AND n1.node_type = 'file' AND n2.node_type = 'file'""",
+            (repo_id,),
+        ).fetchall()
+        # quick map for entity layers per file (for controller/business/data scoring)
+        file_entity_layers: dict[str, list[str]] = {}
+        for pf_path, ent_name, ent_kind in conn.execute(
+            """SELECT file_path, name, node_type FROM nodes
+               WHERE repository_id = ? AND node_type IN ('class','interface','enum','controller','service','repository_layer')""",
+            (repo_id,),
+        ).fetchall():
+            layers = []
+            for lyr, w, _ in _score_name(ent_name, CLASS_SUFFIX_RULES):
+                if w >= 0.7:
+                    layers.append(lyr)
+            if layers:
+                file_entity_layers.setdefault(pf_path, []).extend(layers)
+
+        def _infer_file_layer(fpath: str) -> str | None:
+            fname = Path(fpath).name
+            # try directory + file scoring
+            best: tuple[str, float] | None = None
+            for lyr, w, _ in _score_file_name(fname, FILE_NAME_RULES):
+                if best is None or w > best[1]:
+                    best = (lyr, w)
+            for seg in fpath.lower().split("/"):
+                # ignore noise dirs
+                if seg in ("assets", "l10n", "generated", "gen", ".dart_tool"):
+                    continue
+                for lyr, w, _ in _score_directory(seg, DIRECTORY_NAME_RULES):
+                    if best is None or w > best[1]:
+                        best = (lyr, w)
+            # entity naming as fallback
+            for lyr in file_entity_layers.get(fpath, []):
+                if best is None or 0.8 > best[1]:
+                    best = (lyr, 0.8)
+            return best[0] if best else None
+
+        flow_counts: dict[str, int] = {}
+        for src_fp, tgt_fp in import_edges:
+            src_lyr = _infer_file_layer(src_fp)
+            tgt_lyr = _infer_file_layer(tgt_fp)
+            if src_lyr and tgt_lyr and src_lyr != tgt_lyr:
+                key = f"{src_lyr}->{tgt_lyr}"
+                flow_counts[key] = flow_counts.get(key, 0) + 1
+        # Expected directions get higher weight
+        expected = {
+            "controller->business": 0.7,
+            "business->data": 0.7,
+            "api->business": 0.6,
+            "presentation->business": 0.5,
+            "controller->data": 0.4,
+        }
+        for flow, cnt in flow_counts.items():
+            if cnt >= 2:  # need at least 2 edges to be signal
+                src_lyr, tgt_lyr = flow.split("->")
+                w = expected.get(flow, 0.3) * min(cnt / 4, 1.0)
+                # add evidence for both sides (import graph confirms layer exists)
+                _add_evidence(src_lyr, "import_flow", f"import {flow} x{cnt}", f"import flow {flow}", w)
+                _add_evidence(tgt_lyr, "import_flow", f"import {flow} x{cnt}", f"import flow {flow}", w * 0.8)
+    except Exception as e:
+        logger.debug("Import-graph evidence failed: %s", e)
+
     return layer_evidence, layer_entity_count
 
 

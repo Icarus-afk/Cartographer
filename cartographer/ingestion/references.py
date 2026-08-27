@@ -294,6 +294,42 @@ def _handle_rust_import(import_str: str, source_dir: str) -> list[str]:
     return paths
 
 
+def _handle_dart_import(import_str: str, source_dir: str) -> list[str]:
+    # dart SDK imports like 'dart:core' -> ignore (no file)
+    if import_str.startswith("dart:"):
+        return []
+    # package: imports -> lib/
+    if import_str.startswith("package:"):
+        # package:myapp/foo/bar.dart -> lib/foo/bar.dart and foo/bar.dart
+        without_pkg = import_str.split(":", 1)[1]  # myapp/foo/bar.dart
+        # drop first segment (package name) -> foo/bar.dart
+        parts = without_pkg.split("/", 1)
+        if len(parts) == 2:
+            lib_path = parts[1]
+        else:
+            lib_path = without_pkg
+        # also strip .dart for base matching
+        if lib_path.endswith(".dart"):
+            lib_path = lib_path[:-5]
+        candidates = [f"lib/{lib_path}", lib_path, f"lib/src/{lib_path}"]
+        # keep original with .dart handling via ext matching later
+        return candidates + [import_str, without_pkg]
+    # relative imports: ../foo/bar.dart or foo/bar.dart
+    # keep as relative to source_dir
+    if import_str.startswith(".") or "/" in import_str or import_str.endswith(".dart"):
+        # strip .dart for base matching
+        base = import_str
+        if base.endswith(".dart"):
+            base = base[:-5]
+        # if relative, join with source_dir
+        if base.startswith("."):
+            # use relative handler logic (will be joined)
+            return _handle_relative_import(base, source_dir) + [base, import_str]
+        # also try as package-relative
+        return [base, f"{source_dir}/{base}" if source_dir else base, import_str]
+    return _handle_default_import(import_str)
+
+
 def _handle_default_import(import_str: str) -> list[str]:
     paths = [import_str]
     dotted_path = _dotted_to_path(import_str)
@@ -369,6 +405,8 @@ def _candidates_for_import(
         possible_paths = _handle_relative_import(import_str, source_dir)
     elif source_lang == "rust":
         possible_paths = _handle_rust_import(import_str, source_dir)
+    elif source_lang == "dart":
+        possible_paths = _handle_dart_import(import_str, source_dir)
     else:
         possible_paths = _handle_default_import(import_str)
 
