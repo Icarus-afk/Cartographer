@@ -19,7 +19,9 @@ def _ensure_parsers() -> None:
     from cartographer.parser.languages.c import CParser
     from cartographer.parser.languages.cpp import CppParser
     from cartographer.parser.languages.csharp import CSharpParser
+    from cartographer.parser.languages.dart import DartParser
     from cartographer.parser.languages.elixir import ElixirParser
+    from cartographer.parser.languages.generic import GenericParser
     from cartographer.parser.languages.go import GoParser
     from cartographer.parser.languages.groovy import GroovyParser
     from cartographer.parser.languages.java import JavaParser
@@ -27,6 +29,7 @@ def _ensure_parsers() -> None:
     from cartographer.parser.languages.julia import JuliaParser
     from cartographer.parser.languages.kotlin import KotlinParser
     from cartographer.parser.languages.lua import LuaParser
+    from cartographer.parser.languages.markdown import MarkdownParser
     from cartographer.parser.languages.php import PHPPhpParser
     from cartographer.parser.languages.python import PythonParser
     from cartographer.parser.languages.ruby import RubyParser
@@ -57,7 +60,40 @@ def _ensure_parsers() -> None:
         ProgLang.JULIA: JuliaParser,
         ProgLang.ZIG: ZigParser,
         ProgLang.GROOVY: GroovyParser,
+        ProgLang.DART: DartParser,
+        ProgLang.MARKDOWN: MarkdownParser,
+        ProgLang.YAML: GenericParser,
+        ProgLang.JSON: GenericParser,
+        ProgLang.TOML: GenericParser,
+        ProgLang.SQL: GenericParser,
+        ProgLang.HTML: GenericParser,
+        ProgLang.CSS: GenericParser,
+        ProgLang.SHELL: GenericParser,
+        ProgLang.DOCKERFILE: GenericParser,
+        ProgLang.PROTOBUF: GenericParser,
     }
+
+
+def register_parser(
+    language: ProgLang, parser_cls: type, extensions: list[str] | None = None
+) -> None:
+    _ensure_parsers()
+    assert _PARSER_MAP is not None
+    _PARSER_MAP[language] = parser_cls
+    if extensions:
+        from cartographer.core.models import LANGUAGE_EXTENSIONS
+
+        for ext in extensions:
+            LANGUAGE_EXTENSIONS[ext] = language
+        try:
+            from cartographer.ingestion.engine import LANGUAGE_EXTENSIONS as ENG_EXT
+
+            for ext in extensions:
+                ENG_EXT[language] = ENG_EXT.get(language, ()) + (ext,)
+        except Exception:
+            pass
+    if hasattr(_THREAD_LOCAL, "parser_cache"):
+        _THREAD_LOCAL.parser_cache.pop(language, None)
 
 
 def get_parser(language: ProgLang) -> BaseParser | None:
@@ -69,6 +105,13 @@ def get_parser(language: ProgLang) -> BaseParser | None:
     if language in cache:
         return cache[language]
     cls = _PARSER_MAP.get(language)
+    if cls is None and language != ProgLang.UNKNOWN:
+        try:
+            from cartographer.parser.languages.generic import GenericParser
+
+            cls = GenericParser
+        except Exception:
+            cls = None
     instance = cls(language) if cls else None
     if instance:
         cache[language] = instance
@@ -77,4 +120,5 @@ def get_parser(language: ProgLang) -> BaseParser | None:
 
 def supported_languages() -> list[ProgLang]:
     _ensure_parsers()
+    assert _PARSER_MAP is not None
     return list(_PARSER_MAP.keys())

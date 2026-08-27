@@ -94,6 +94,12 @@ FILE_NAME_RULES: list[tuple[str, str, float]] = [
     ("graphql",      "api",        1.0),
     ("grpc",         "api",        1.0),
     ("endpoint",     "api",        0.9),
+    ("readme",       "documentation", 0.9),
+    ("changelog",    "documentation", 0.8),
+    ("contributing", "documentation", 0.8),
+    ("adr",          "documentation", 1.0),
+    ("guide",        "documentation", 0.7),
+    ("doc",          "documentation", 0.7),
 ]
 
 DIRECTORY_NAME_RULES: list[tuple[str, str, float]] = [
@@ -156,6 +162,10 @@ DIRECTORY_NAME_RULES: list[tuple[str, str, float]] = [
     ("rest",        "api",        0.8),
     ("graphql",     "api",        1.0),
     ("grpc",        "api",        1.0),
+    ("docs",        "documentation", 1.0),
+    ("documentation","documentation", 1.0),
+    ("wiki",        "documentation", 0.9),
+    ("adr",         "documentation", 1.0),
 ]
 
 FRAMEWORK_FILE_RULES: dict[str, list[tuple[str, str, float]]] = {
@@ -236,6 +246,20 @@ FRAMEWORK_FILE_RULES: dict[str, list[tuple[str, str, float]]] = {
         ("middleware",   "middleware", 1.0),
         ("main.rs",      "controller", 0.5),
     ],
+    "flutter": [
+        ("main.dart",    "presentation", 0.8),
+        ("widgets",      "presentation", 1.0),
+        ("screens",      "presentation", 0.9),
+        ("providers",    "business",     0.8),
+        ("bloc",         "business",     0.9),
+        ("models",       "data",         0.9),
+        ("services",     "business",     0.8),
+        ("pubspec.yaml", "config",       0.7),
+    ],
+    "dart": [
+        ("main.dart",    "presentation", 0.5),
+        ("pubspec.yaml", "config",       0.7),
+    ],
 }
 
 LAYER_META: dict[str, dict[str, str]] = {
@@ -250,6 +274,7 @@ LAYER_META: dict[str, dict[str, str]] = {
     "migration":    {"label": "Migration",    "color": "bright_blue"},
     "testing":      {"label": "Testing",      "color": "bright_green"},
     "utility":      {"label": "Utility",      "color": "bright_white"},
+    "documentation": {"label": "Documentation", "color": "bright_cyan"},
 }
 
 PATTERN_DEFINITIONS: list[dict[str, Any]] = [
@@ -294,15 +319,29 @@ PATTERN_DEFINITIONS: list[dict[str, Any]] = [
 
 # ─── detection helpers ───────────────────────────────────────────────────────
 
+def _tokenize(name: str) -> list[str]:
+    import re
+
+    s1 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    s1 = s1.replace("-", "_").replace(" ", "_")
+    tokens = [t.lower() for t in re.split(r"[_\.]+", s1) if t]
+    # also split on boundaries where token contains original lowercased keyword fragments
+    return tokens
+
+
 def _score_name(name: str, rules: list[tuple[str, str, float]]) -> list[tuple[str, float, str]]:
     results: list[tuple[str, float, str]] = []
     lower = name.lower().replace("-", "_")
+    tokens = _tokenize(name)
     for keyword, layer, weight in rules:
-        if lower.endswith(keyword):
+        kw = keyword.lower()
+        if lower.endswith(kw):
             results.append((layer, weight, f"name suffix '{keyword}'"))
-        elif lower.startswith(keyword):
+        elif lower.startswith(kw):
             results.append((layer, weight * 0.8, f"name prefix '{keyword}'"))
-        elif keyword in lower:
+        elif kw in tokens:
+            results.append((layer, weight * 0.75, f"name token '{keyword}'"))
+        elif kw in lower:
             results.append((layer, weight * 0.5, f"name contains '{keyword}'"))
     return results
 
@@ -313,15 +352,15 @@ def _score_file_name(
     results: list[tuple[str, float, str]] = []
     lower = name.lower()
     stem = Path(lower).stem
+    tokens = _tokenize(stem)
+    boundary_keywords = {"api", "spec", "test", "env", "lib", "ui"}
     for keyword, layer, weight in rules:
         kw = keyword.lower()
-        # Short keywords (≤3 chars) use word-boundary matching to avoid false positives
-        # e.g. "api" should not match "capitalize", "rapid", etc.
-        if len(kw) <= 3:
-            if stem == kw or stem.endswith(f"_{kw}") or stem.startswith(f"{kw}_") or f"_{kw}_" in stem:
+        if len(kw) <= 3 or kw in boundary_keywords:
+            if stem == kw or kw in tokens or stem.endswith(f"_{kw}") or stem.startswith(f"{kw}_") or f"_{kw}_" in stem or f"-{kw}" in stem or stem.startswith(f"{kw}-") or stem.endswith(f".{kw}") or f".{kw}." in stem:
                 results.append((layer, weight, f"filename contains '{keyword}'"))
         else:
-            if kw in stem:
+            if kw in stem or kw in tokens:
                 results.append((layer, weight, f"filename contains '{keyword}'"))
     return results
 
@@ -330,10 +369,15 @@ def _score_directory(
     name: str, rules: list[tuple[str, str, float]]
 ) -> list[tuple[str, float, str]]:
     results: list[tuple[str, float, str]] = []
-    lower = name.lower()
+    lower = name.lower().replace("-", "_")
+    tokens = _tokenize(name)
     for keyword, layer, weight in rules:
-        if lower == keyword:
+        kw = keyword.lower()
+        if lower == kw or kw in tokens:
             results.append((layer, weight, f"directory named '{keyword}'"))
+        elif kw in lower:
+            # partial match within directory name (e.g. my_controllers)
+            results.append((layer, weight * 0.6, f"directory contains '{keyword}'"))
     return results
 
 
@@ -539,7 +583,8 @@ def _collect_evidence(
 
     all_class_rows = conn.execute(
         """SELECT n.name, n.file_path FROM nodes n
-           WHERE n.repository_id = ? AND n.node_type IN ('class','interface','enum')""",
+           WHERE n.repository_id = ? AND n.node_type IN
+           ('class','interface','enum','controller','service','repository_layer','middleware','database','table')""",
         (repo_id,),
     ).fetchall()
 
@@ -636,6 +681,45 @@ def _collect_evidence(
                 _add_evidence("presentation", "rails_convention", dpath,
                               "Rails views directory", 1.0)
 
+    # 7. Documentation / markdown detection (not reliant purely on filenames)
+    doc_file_count = 0
+    for fname, fpath in all_file_rows:
+        lower = fpath.lower()
+        if lower.endswith((".md", ".markdown", ".mdx", ".rst", ".adoc")):
+            doc_file_count += 1
+            _add_evidence("documentation", "file_naming", fpath, "markdown file", 0.7)
+            if "adr" in lower or "docs/adr" in lower or lower.startswith("adr/"):
+                _add_evidence("documentation", "adr", fpath, "ADR document", 0.9)
+    # also count markdown/adr node types directly
+    doc_nodes = conn.execute(
+        """SELECT COUNT(*) FROM nodes n WHERE n.repository_id = ? AND n.node_type IN ('markdown','adr','wiki','diagram')""",
+        (repo_id,),
+    ).fetchone()
+    if doc_nodes and doc_nodes[0] > 0:
+        for _ in range(min(doc_nodes[0], 3)):
+            _add_evidence("documentation", "markdown_node", f"doc nodes ({doc_nodes[0]} found)", "markdown entity", 0.6)
+
+    # 8. Flutter / Dart convention reinforcement
+    if "flutter" in fw_names or "dart" in fw_names:
+        for fname, fpath in all_file_rows:
+            lower = fpath.lower()
+            if "/lib/widgets/" in lower or "/lib/screens/" in lower or "/widgets/" in lower:
+                _add_evidence("presentation", "flutter_convention", fpath, "Flutter widget/screen", 0.8)
+            if "/lib/providers/" in lower or "/bloc/" in lower or "/lib/bloc/" in lower:
+                _add_evidence("business", "flutter_convention", fpath, "Flutter state mgmt", 0.8)
+            if "/lib/models/" in lower:
+                _add_evidence("data", "flutter_convention", fpath, "Dart model", 0.7)
+
+    # 9. Config / infra from file extensions when strong evidence
+    for fname, fpath in all_file_rows:
+        lower = fpath.lower()
+        if lower.endswith((".yaml", ".yml")) and ("docker" in lower or "k8s" in lower or "compose" in lower):
+            _add_evidence("infrastructure", "file_naming", fpath, "infra yaml", 0.6)
+        if lower == "dockerfile" or lower.endswith("/dockerfile") or lower.endswith(".dockerfile"):
+            _add_evidence("infrastructure", "file_naming", fpath, "dockerfile", 0.8)
+        if lower.endswith((".proto",)):
+            _add_evidence("api", "file_naming", fpath, "protobuf api", 0.7)
+
     return layer_evidence, layer_entity_count
 
 
@@ -655,8 +739,17 @@ def _aggregate_layers(
         for e in evidence:
             evidence_by_kind[e["kind"]] = evidence_by_kind.get(e["kind"], 0) + 1
 
-        conf_raw = (avg_weight * 0.4 + max_weight * 0.6) * min(entity_count / 3, 1.0)
+        kind_diversity = len(evidence_by_kind)
+        diversity_bonus = min(kind_diversity * 0.05, 0.15)
+        source_factor = min(entity_count / 3, 1.0)
+        if entity_count == 1 and kind_diversity == 1 and max_weight < 1.0:
+            source_factor *= 0.75
+        conf_raw = (avg_weight * 0.35 + max_weight * 0.5 + diversity_bonus) * source_factor
+        if len(evidence) == 1 and max_weight < 0.9:
+            conf_raw *= 0.7
         confidence = round(min(conf_raw, 1.0), 2)
+        if confidence < 0.2:
+            continue
 
         resolved[layer] = {
             "description": LAYER_META.get(layer, {}).get("label", layer),
@@ -815,6 +908,8 @@ def _detect_framework_patterns(
         ("Laravel MVC", "laravel", {"controller", "data", "presentation", "migration"}, None),
         ("Actix Web Modular", "actix_web", {"controller", "data", "middleware"}, None),
         ("Axum Modular", "axum", {"controller", "data", "middleware", "config"}, None),
+        ("Flutter Layered", "flutter", {"presentation", "business", "data"}, None),
+        ("Dart Modular", "dart", {"presentation", "business"}, None),
     ]
     for name, fw_key, layers, fixed_conf in fwp:
         if fw_key not in fw_names:

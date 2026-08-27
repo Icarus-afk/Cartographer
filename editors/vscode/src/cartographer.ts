@@ -204,7 +204,29 @@ export class CartographerClient {
     } catch { return []; }
   }
 
+  private tryJson(out: string): any | null {
+    try {
+      const j = JSON.parse(out);
+      if (j && typeof j === "object") return j;
+    } catch {}
+    return null;
+  }
+
   private parseSearchResults(out: string): SearchResult[] {
+    const j = this.tryJson(out);
+    if (j) {
+      const data = j.data || j;
+      const arr = data.results || data.data?.results || (Array.isArray(data) ? data : null);
+      if (Array.isArray(arr)) {
+        return arr.map((r: any) => ({
+          name: r.name || r.label || "",
+          type: r.type || r.node_type || "unknown",
+          file_path: r.file_path || r.path || undefined,
+          score: r.score || r.similarity || undefined,
+        })).filter((r: SearchResult) => r.name);
+      }
+      if (data.results && Array.isArray(data.results)) return data.results;
+    }
     const results: SearchResult[] = [];
     const root = this._projectRoot;
     let pending: SearchResult | null = null;
@@ -243,6 +265,21 @@ export class CartographerClient {
   }
 
   private parseSummary(out: string): Summary | null {
+    const j = this.tryJson(out);
+    if (j) {
+      const data = j.data || j;
+      if (data.name || data.total_nodes !== undefined) {
+        return {
+          name: data.name || "",
+          path: data.path || "",
+          total_nodes: data.total_nodes || data.nodes || 0,
+          total_edges: data.total_edges || data.edges || 0,
+          node_breakdown: data.node_breakdown || {},
+          edge_breakdown: data.edge_breakdown || {},
+        };
+      }
+      if (data.summary) return this.parseSummary(JSON.stringify(data.summary));
+    }
     const lines = out.split("\n");
     const s: Summary = {
       name: lines[0]?.replace("Repository: ", "").trim() || "",
@@ -280,6 +317,12 @@ export class CartographerClient {
       const out = await this.mcpOrCli("impact", { target },
         () => this.exec(["impact", target])
       );
+      const j = this.tryJson(out);
+      if (j && j.data) {
+        const arr = j.data.dependents || j.data.results || j.data;
+        if (Array.isArray(arr)) return arr.map((r: any) => ({ type: r.type, name: r.name, file_path: r.file_path, via_edge: r.via_edge }));
+        if (j.data.dependents) return j.data.dependents;
+      }
       const results: ImpactResult[] = [];
       for (const l of out.split("\n")) {
         const m = l.match(/^\s{4}\[(\w+)\s*\]\s(.+?)\s\((.+)\)$/);
@@ -294,6 +337,11 @@ export class CartographerClient {
       const out = await this.mcpOrCli("neighbors", { name, depth },
         () => this.exec(["neighbors", name, "-d", String(depth)])
       );
+      const j = this.tryJson(out);
+      if (j && j.data) {
+        const arr = j.data.neighbors || j.data.results;
+        if (Array.isArray(arr)) return arr.map((r: any, i: number) => ({ name: r.name, type: r.type, depth: r.depth ?? i }));
+      }
       const results: NeighborResult[] = [];
       for (const l of out.split("\n")) {
         const m = l.match(/^(\s*)\[(\w+)\s*\]\s(.+)$/);
@@ -308,6 +356,11 @@ export class CartographerClient {
       const out = await this.mcpOrCli("path", { from_name: from, to_name: to },
         () => this.exec(["path", from, to])
       );
+      const j = this.tryJson(out);
+      if (j && j.data) {
+        const arr = j.data.path || j.data.results;
+        if (Array.isArray(arr)) return arr.map((r: any, i: number) => ({ name: r.name, type: r.type, depth: r.depth ?? i }));
+      }
       const results: PathResult[] = [];
       for (const l of out.split("\n")) {
         const m = l.match(/^\s{2}(→\s)?\[(\w+)\s*\]\s(.+)$/);
@@ -323,6 +376,11 @@ export class CartographerClient {
       const out = await this.mcpOrCli("similar", { target, limit },
         () => this.exec(["similar", target, "-l", String(limit)])
       );
+      const j = this.tryJson(out);
+      if (j && j.data) {
+        const arr = j.data.results || j.data;
+        if (Array.isArray(arr)) return arr.map((r: any) => ({ name: r.name, type: r.type, file_path: r.file_path, score: r.similarity || r.score }));
+      }
       const results: SearchResult[] = [];
       for (const l of out.split("\n")) {
         const m = l.match(/^\s{2}\[(\w+)\s*\]\s(.+?)\s+\(score:\s*([\d.]+)\)/);

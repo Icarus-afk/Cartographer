@@ -155,7 +155,12 @@ def detect_languages(files: list[Path]) -> dict[Language, int]:
     counts: dict[Language, int] = {}
     for f in files:
         ext = f.suffix.lower()
-        lang = LANGUAGE_EXTENSIONS.get(ext, Language.UNKNOWN)
+        name = f.name.lower()
+        if name == "dockerfile" or name.startswith("dockerfile."):
+            lang = Language.DOCKERFILE
+        else:
+            lang = LANGUAGE_EXTENSIONS.get(ext, Language.UNKNOWN)
+            # treat markdown etc as distinct; keep UNKNOWN for truly unknown
         counts[lang] = counts.get(lang, 0) + 1
     return counts
 

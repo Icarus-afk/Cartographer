@@ -31,7 +31,18 @@ _mcp: FastMCP | None = None
 def mcp() -> FastMCP:
     global _mcp
     if _mcp is None:
-        _mcp = FastMCP("Cartographer")
+        _mcp = FastMCP("Cartographer", instructions="""
+Cartographer — Repository Intelligence Operating System.
+
+Workflow for LLMs:
+1. Call status (or summarize) to check if repo is indexed. If empty, call index with path=".".
+2. Use search for keyword lookup, ask for natural language questions, file_summary for compressed file reads (90% token savings vs reading files).
+3. Use impact/neighbors/path for dependency analysis.
+4. Use architecture for high-level structure, similar for semantic search (requires embed), graph_data for visualization.
+5. All tools support --json style structured output via JSON envelope: {"status":"ok","data":{...}}.
+
+Token savings: file_summary ~200 tokens vs 2000 for full file; summarize ~200 vs 60k. Prefer cartographer tools over raw file reads.
+""")
     return _mcp
 
 
@@ -41,6 +52,23 @@ def _db(db_str: str | None) -> Path:
         return Path(db_str)
     if _CUSTOM_DB_PATH is not None:
         return _CUSTOM_DB_PATH
+    # Per-project config like CLI: .cartographer/config.json in CWD
+    try:
+        cfg_path = Path.cwd() / ".cartographer" / "config.json"
+        if cfg_path.exists():
+            import json as _j
+            cfg = _j.loads(cfg_path.read_text())
+            cfg_db = cfg.get("dbPath", "")
+            if cfg_db:
+                p = Path(cfg_db)
+                return p if p.is_absolute() else Path.cwd() / cfg_db
+            return Path.cwd() / ".cartographer" / "data.db"
+    except Exception:
+        pass
+    # also check CARTOGRAPHER_DB env
+    import os as _os
+    if _os.environ.get("CARTOGRAPHER_DB"):
+        return Path(_os.environ["CARTOGRAPHER_DB"])
     return DEFAULT_DB
 
 
@@ -56,6 +84,35 @@ def _get_conn(db: str | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _ok(data, hint: str | None = None) -> str:
+    payload = {"status": "ok", "data": data}
+    if hint:
+        payload["hint"] = hint
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _empty(message: str, hint: str | None = None) -> str:
+    payload = {"status": "empty", "message": message}
+    if hint:
+        payload["hint"] = hint
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _error(message: str, hint: str | None = None) -> str:
+    payload = {"status": "error", "error": message}
+    if hint:
+        payload["hint"] = hint
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _clamp(v: int, lo: int, hi: int, default: int) -> int:
+    try:
+        iv = int(v)
+    except Exception:
+        return default
+    return max(lo, min(iv, hi))
+
+
 @mcp().resource(
     "cartographer://repos",
     description="List all indexed repositories",
@@ -65,7 +122,7 @@ def get_repos() -> str:
     rows = conn.execute("SELECT id, name, path FROM repositories ORDER BY name").fetchall()
     conn.close()
     if not rows:
-        return "No repositories indexed."
+        return "No repositories indexed. Run cartographer index first."
     lines = ["Indexed repositories:"]
     for r in rows:
         lines.append(f"  [{r['id']}] {r['name']}  ({r['path']})")
@@ -83,7 +140,7 @@ def get_repo(name: str) -> str:
     ).fetchone()
     if not row:
         conn.close()
-        return f"No repository found: {name}"
+        return f"No repository found: {name}. Try cartographer://repos or list_repos tool."
     node_count = conn.execute(
         "SELECT COUNT(*) FROM nodes WHERE repository_id = ?", (row["id"],)
     ).fetchone()[0]
@@ -111,30 +168,148 @@ def get_repo(name: str) -> str:
     description="Get details of a specific node by ID",
 )
 def get_node(node_id: str) -> str:
+    try:
+        nid = int(node_id)
+    except ValueError:
+        return _error(f"Invalid node_id: {node_id}", "node_id must be an integer")
     conn = _get_conn()
     row = conn.execute(
         """SELECT n.id, n.name, n.node_type, n.file_path, n.metadata_json, r.name as repo
            FROM nodes n
            JOIN repositories r ON n.repository_id = r.id
            WHERE n.id = ?""",
-        (int(node_id),),
+        (nid,),
     ).fetchone()
     conn.close()
     if not row:
-        return f"No node with id {node_id}"
+        return _error(f"No node with id {node_id}", "Try search to find node ids")
     lines = [f"Node [{row['id']}]: {row['name']} ({row['node_type']})"]
     lines.append(f"  Repository: {row['repo']}")
     lines.append(f"  File: {row['file_path'] or '(root)'}")
     if row["metadata_json"]:
-        meta = json.loads(row["metadata_json"])
-        if meta:
-            lines.append(f"  Metadata: {json.dumps(meta, indent=2)}")
+        try:
+            meta = json.loads(row["metadata_json"])
+            if meta:
+                lines.append(f"  Metadata: {json.dumps(meta, indent=2)}")
+        except Exception:
+            pass
     return "\n".join(lines)
+
+
+# ── New: status/doctor/health ──
+
+@mcp().tool(
+    name="status",
+    description="Show indexing status, DB health, and diagnostics. Call this FIRST to check if a repo is indexed. Returns repos, node/edge counts, DB size, languages, and health checks. Use before search/ask if unsure. Example: status() -> check if empty -> then index(path=\".\")",
+)
+def status_tool(
+    db: str | None = None,
+) -> str:
+    import os
+    import importlib.util
+    db_path = _db(db)
+    data: dict = {"db_path": str(db_path), "exists": db_path.exists()}
+    if not db_path.exists():
+        return _empty("DB not initialized (no file)", "Run index(path=\".\") to index current repo")
+    try:
+        size = db_path.stat().st_size
+        data["size_bytes"] = size
+        data["size_human"] = f"{size/1024/1024:.1f}MB" if size>1024*1024 else f"{size/1024:.1f}KB"
+    except Exception:
+        pass
+    conn = _get_conn(db)
+    try:
+        repo_count = conn.execute("SELECT COUNT(*) FROM repositories").fetchone()[0]
+        node_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+        edge_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+        embed_count = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        per_repo = conn.execute("SELECT name, path FROM repositories ORDER BY name").fetchall()
+        data.update({
+            "repositories": [{"name": r[0], "path": r[1]} for r in per_repo],
+            "counts": {"repos": repo_count, "nodes": node_count, "edges": edge_count, "embeddings": embed_count},
+            "status": "ok" if repo_count>0 else "empty",
+        })
+        if repo_count==0:
+            data["hint"] = "Run index(path=\".\") to index current repo"
+        # health
+        checks=[]
+        for mod,label in [("tree_sitter","tree-sitter"),("fastembed","fastembed"),("mcp","mcp")]:
+            checks.append({"check":label,"ok": importlib.util.find_spec(mod) is not None})
+        data["health"]=checks
+        try:
+            from cartographer.parser.registry import supported_languages
+            data["languages"]=[l.value for l in supported_languages()]
+        except Exception:
+            pass
+    finally:
+        conn.close()
+    return _ok(data, None if data.get("counts",{}).get("repos",0)>0 else "No repos indexed — call index(path=\".\")")
+
+
+@mcp().tool(
+    name="doctor",
+    description="Alias for status — diagnose setup and suggest fixes. Use when things seem broken.",
+)
+def doctor_tool(db: str | None = None) -> str:
+    return status_tool(db)
+
+
+@mcp().tool(
+    name="health",
+    description="Alias for status — health check for automation.",
+)
+def health_tool(db: str | None = None) -> str:
+    return status_tool(db)
+
+
+@mcp().tool(
+    name="list_repos",
+    description="List all indexed repositories (tool version of cartographer://repos). Returns JSON array of {name, path, nodes, edges}. Use to discover available repos before querying.",
+)
+def list_repos_tool(db: str | None = None) -> str:
+    conn = _get_conn(db)
+    rows = conn.execute(
+        """SELECT r.name, r.path,
+                  (SELECT COUNT(*) FROM nodes WHERE repository_id=r.id) as nodes,
+                  (SELECT COUNT(*) FROM edges WHERE repository_id=r.id) as edges
+           FROM repositories r ORDER BY r.name"""
+    ).fetchall()
+    conn.close()
+    repos=[{"name": r[0], "path": r[1], "nodes": r[2], "edges": r[3]} for r in rows]
+    if not repos:
+        return _empty("No repositories indexed", "Run index(path=\".\")")
+    return _ok({"repos": repos, "count": len(repos)})
+
+
+@mcp().tool(
+    name="ensure_indexed",
+    description="Ensure a repository is indexed, indexing it if needed. Idempotent. Use when unsure if repo is indexed. Returns status and whether indexing was performed. Example: ensure_indexed(path=\"/path/to/repo\")",
+)
+def ensure_indexed_tool(path: str = ".", db: str | None = None) -> str:
+    from pathlib import Path as P
+    p = P(path).resolve()
+    if not p.is_dir():
+        return _error(f"Path is not a directory: {path}", "Provide a valid repo path")
+    conn = _get_conn(db)
+    row = conn.execute("SELECT id FROM repositories WHERE path = ?", (str(p),)).fetchone()
+    conn.close()
+    if row:
+        return _ok({"path": str(p), "already_indexed": True, "message": "Already indexed"})
+    result = index_repository(str(p), db_path=_db(db))
+    if not result.success and not result.manifest:
+        return _error(f"Indexing failed: {result.errors}", "Check path and permissions")
+    return _ok({
+        "path": str(p),
+        "already_indexed": False,
+        "files": result.manifest.total_files if result.manifest else 0,
+        "duration_ms": result.duration_ms,
+        "errors": result.errors,
+    }, hint="Now you can use search/summarize/etc.")
 
 
 @mcp().tool(
     name="search",
-    description="Search for nodes (classes, functions, files) by name in the knowledge graph",
+    description="Keyword search for nodes (classes, functions, files) by name. Use for exact symbol lookup. For questions use 'ask'. Params: query (required, e.g. 'UserService'), repo (optional, filter by repo name), node_type (optional, e.g. 'class','function','file'), limit (1-100, default 20). Returns JSON {results:[{id,type,name,file_path,score}]}. Example: search(query=\"UserService\", limit=10)",
 )
 def search(
     query: str,
@@ -143,43 +318,57 @@ def search(
     limit: int = 20,
     db: str | None = None,
 ) -> str:
-    results = search_nodes(query, _db(db), repo, node_type, limit)
+    if not query or not query.strip():
+        return _error("query is required and cannot be empty", "Example: search(query=\"UserService\")")
+    limit = _clamp(limit, 1, 100, 20)
+    try:
+        results = search_nodes(query.strip(), _db(db), repo, node_type, limit)
+    except Exception as e:
+        logger.exception("search failed")
+        return _error(f"Search failed: {e}", "Check status() and ensure repo is indexed")
     if not results:
-        return "No results found."
-    lines = [f"Found {len(results)} result(s):"]
-    for r in results:
-        lines.append(f"  [{r['type']}] {r['name']}")
-        if r.get("file_path"):
-            lines.append(f"      {r['file_path']}")
-    return "\n".join(lines)
+        return _empty(f"No results for '{query}'", "Try broader query, check repo name, or run status() to verify indexing")
+    # Return both human and JSON: JSON envelope with human hint
+    data={"query":query,"repo":repo,"node_type":node_type,"count":len(results),"results":results}
+    human=[f"Found {len(results)} result(s) for '{query}':"]
+    for r in results[:5]:
+        human.append(f"  [{r['type']}] {r['name']}" + (f" — {r['file_path']}" if r.get("file_path") else ""))
+    if len(results)>5:
+        human.append(f"  ... and {len(results)-5} more (see JSON data)")
+    payload={"status":"ok","human": "\n".join(human),"data": data}
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 @mcp().tool(
     name="impact",
-    description="Analyze what depends on a given file, class, or function",
+    description="Analyze what depends on a file, class, or function (reverse dependencies). Use to assess change risk. Params: target (required, file path or symbol name, e.g. 'UserService' or 'src/models.py'), repo (optional). Returns JSON {target, count, dependents:[{id,type,name,file_path,via_edge}]}. Example: impact(target=\"UserService\")",
 )
 def impact(
     target: str,
     repo: str | None = None,
     db: str | None = None,
 ) -> str:
-    results = impact_analysis(target, _db(db), repo)
+    if not target or not target.strip():
+        return _error("target is required", "Example: impact(target=\"UserService\")")
+    try:
+        results = impact_analysis(target.strip(), _db(db), repo)
+    except Exception as e:
+        return _error(f"Impact failed: {e}")
     if not results:
-        return "No dependents found."
-    lines = [f"Impact analysis for '{target}':"]
-    by_edge: dict[str, list] = {}
+        return _empty(f"No dependents for '{target}'", "Try search to find exact symbol name, or check file path")
+    data={"target":target,"count":len(results),"dependents":results}
+    human=[f"Impact for '{target}': {len(results)} dependents"]
+    by_edge: dict[str,int]={}
     for r in results:
-        by_edge.setdefault(r.get("via_edge", "UNKNOWN"), []).append(r)
-    for edge_type, nodes in by_edge.items():
-        lines.append(f"  Via {edge_type}:")
-        for n in nodes:
-            lines.append(f"    [{n['type']}] {n['name']} ({n['file_path']})")
-    return "\n".join(lines)
+        by_edge[r.get("via_edge","UNKNOWN")] = by_edge.get(r.get("via_edge","UNKNOWN"),0)+1
+    for k,v in sorted(by_edge.items(), key=lambda x:-x[1]):
+        human.append(f"  {k}: {v}")
+    return json.dumps({"status":"ok","human":"\n".join(human),"data":data}, ensure_ascii=False, indent=2)
 
 
 @mcp().tool(
     name="neighbors",
-    description="Show neighboring nodes of a class, function, or file in the graph",
+    description="Show neighboring nodes of a class/function/file (graph traversal). Params: name (required, symbol or file), repo (optional), depth (1-5, default 2). Returns JSON {node, neighbors}. Example: neighbors(name=\"UserService\", depth=2)",
 )
 def neighbors(
     name: str,
@@ -187,26 +376,31 @@ def neighbors(
     depth: int = 2,
     db: str | None = None,
 ) -> str:
+    if not name or not name.strip():
+        return _error("name is required", "Example: neighbors(name=\"UserService\")")
+    depth = _clamp(depth,1,5,2)
     conn = _get_conn(db)
-    node = _resolve_target(conn, name, repo)
+    node = _resolve_target(conn, name.strip(), repo)
     conn.close()
 
     if not node:
-        return f"No node found matching '{name}'."
+        return _empty(f"No node matching '{name}'", "Try search(query=\"{name}\") to find correct name")
 
-    results = get_neighbors(node["id"], _db(db), depth)
-    lines = [f"Neighbors of [{node['type']}] {node['name']}:"]
+    try:
+        results = get_neighbors(node["id"], _db(db), depth)
+    except Exception as e:
+        return _error(f"Neighbors failed: {e}")
+    data={"node":node,"depth":depth,"count":len(results),"neighbors":results}
+    human=[f"Neighbors of [{node['type']}] {node['name']}: {len(results)} nodes at depth {depth}"]
     for r in results:
-        if r["depth"] == 0:
-            continue
-        indent = "  " * r["depth"]
-        lines.append(f"{indent}[{r['type']}] {r['name']}")
-    return "\n".join(lines)
+        if r["depth"]==0: continue
+        human.append(f"{'  '*r['depth']}[{r['type']}] {r['name']}")
+    return json.dumps({"status":"ok","human":"\n".join(human),"data":data}, ensure_ascii=False, indent=2)
 
 
 @mcp().tool(
     name="path",
-    description="Find the shortest path between two nodes in the knowledge graph",
+    description="Find the shortest path between two nodes. Params: from_name, to_name (required), max_depth (1-10, default 5), repo/db optional. Returns JSON {path:[{id,type,name,file_path,depth}]}. Example: path(from_name=\"UserController\", to_name=\"Database\")",
 )
 def find_path_between(
     from_name: str,
@@ -214,94 +408,68 @@ def find_path_between(
     max_depth: int = 5,
     db: str | None = None,
 ) -> str:
-    results = find_path(from_name, to_name, _db(db), max_depth=max_depth)
+    if not from_name or not to_name:
+        return _error("from_name and to_name are required")
+    max_depth=_clamp(max_depth,1,10,5)
+    try:
+        results = find_path(from_name.strip(), to_name.strip(), _db(db), max_depth=max_depth)
+    except Exception as e:
+        return _error(f"Path failed: {e}")
     if not results:
-        return "No path found."
-    lines = [f"Path ({len(results)} hops):"]
+        return _empty(f"No path between '{from_name}' and '{to_name}'", "Verify names via search; try larger max_depth")
+    data={"from":from_name,"to":to_name,"max_depth":max_depth,"hops":len(results),"path":results}
+    human=[f"Path {len(results)} hops from '{from_name}' to '{to_name}':"]
     for r in results:
-        arrow = " → " if r["depth"] > 0 else "   "
-        lines.append(f"  {arrow}[{r['type']}] {r['name']}")
-        if r.get("file_path"):
-            lines.append(f"      {r['file_path']}")
-    return "\n".join(lines)
+        arrow=" → " if r["depth"]>0 else "   "
+        human.append(f"  {arrow}[{r['type']}] {r['name']}" + (f" — {r['file_path']}" if r.get("file_path") else ""))
+    return json.dumps({"status":"ok","human":"\n".join(human),"data":data}, ensure_ascii=False, indent=2)
 
 
 @mcp().tool(
     name="summarize",
-    description="Generate a summary of the repository from the knowledge graph",
+    description="Generate a repository summary (nodes, edges, breakdown). Params: repo (optional, defaults to largest repo), db optional. Returns JSON {name, path, total_nodes, total_edges, node_breakdown, edge_breakdown, top_files}. Use for repo overview before diving deeper. Example: summarize(repo=\"my-repo\")",
 )
 def summarize(
     repo: str | None = None,
     db: str | None = None,
 ) -> str:
-    summary = generate_summary(_db(db), repo)
+    try:
+        summary = generate_summary(_db(db), repo)
+    except Exception as e:
+        return _error(f"Summarize failed: {e}")
     if not summary:
-        return "No repository found. Run 'cartographer index' first."
-    lines = [
-        f"Repository: {summary['name']}",
-        f"Path: {summary['path']}",
-        f"Total nodes: {summary['total_nodes']}",
-        f"Total edges: {summary['total_edges']}",
-        "",
-        "Node breakdown:",
-    ]
-    for ntype, count in summary.get("node_breakdown", {}).items():
-        lines.append(f"  {ntype}: {count}")
-    lines.append("")
-    lines.append("Edge breakdown:")
-    for etype, count in summary.get("edge_breakdown", {}).items():
-        lines.append(f"  {etype}: {count}")
-    return "\n".join(lines)
+        return _empty("No repository found", "Run index(path=\".\") first; check status()")
+    return _ok(summary, hint="Use search/file_summary for details; architecture for layers")
 
 
 @mcp().tool(
     name="architecture",
-    description="Detect or retrieve the architecture layers and patterns of the repository",
+    description="Detect or retrieve architecture layers and patterns. Params: repo (optional), detect (bool, default false — set true to re-detect and write to DB), db optional. Returns JSON {repository, frameworks, layers, patterns, dependency_flow}. Example: architecture(detect=true)",
 )
 def architecture(
     repo: str | None = None,
     detect: bool = False,
     db: str | None = None,
 ) -> str:
-    if detect:
-        result = detect_architecture(_db(db), repo)
+    try:
+        if detect:
+            result = detect_architecture(_db(db), repo)
+            if "error" in result:
+                return _error(result["error"], "Run index() first")
+            return _ok(result)
+        result = get_architecture(_db(db), repo)
         if "error" in result:
-            return result["error"]
-        lines = [f"Architecture for {result['repository']}:", ""]
-        if result.get("frameworks"):
-            lines.append("Detected frameworks:")
-            for fw in result["frameworks"]:
-                pct = round(fw["confidence"] * 100)
-                lines.append(f"  {fw['name']} ({pct}% confidence)")
-            lines.append("")
-        if result["layers"]:
-            lines.append("Layers:")
-            for layer_name, info in result["layers"].items():
-                pct = round(info["confidence"] * 100)
-                lines.append(f"  {info['description']} ({pct}% confidence, "
-                             f"{info['entity_count']} entities)")
-        if result["patterns"]:
-            lines.append("")
-            lines.append("Architecture patterns:")
-            for p in result["patterns"]:
-                pct = round(p["confidence"] * 100)
-                lines.append(f"  {p['name']} ({pct}% confidence)")
-        return "\n".join(lines)
-
-    result = get_architecture(_db(db), repo)
-    if "error" in result:
-        return result["error"]
-    if not result["layers"]:
-        return "No architecture data. Run with detect=True first."
-    lines = [f"Architecture for {result['repository']}:"]
-    for layer in result["layers"]:
-        lines.append(f"  {layer['name']}: {layer['description']}")
-    return "\n".join(lines)
+            return _error(result["error"], "Run architecture(detect=true) to detect")
+        if not result.get("layers"):
+            return _empty("No architecture data", "Run architecture(detect=true)")
+        return _ok(result)
+    except Exception as e:
+        return _error(f"Architecture failed: {e}")
 
 
 @mcp().tool(
     name="similar",
-    description="Find semantically similar nodes using vector embeddings",
+    description="Find semantically similar nodes using vector embeddings. Requires `embed` first (via CLI `cartographer embed`). Params: target (symbol or free text), repo, limit (1-100). Returns JSON {target, results:[{id,type,name,file_path,similarity}]}. Example: similar(target=\"auth middleware\", limit=10)",
 )
 def similar(
     target: str,
@@ -309,29 +477,34 @@ def similar(
     limit: int = 20,
     db: str | None = None,
 ) -> str:
+    if not target or not target.strip():
+        return _error("target is required")
+    limit=_clamp(limit,1,100,20)
     db_path = _db(db)
     conn = _get_conn(db)
-    node = _resolve_target(conn, target, repo)
+    node = _resolve_target(conn, target.strip(), repo)
     conn.close()
 
-    if node:
-        results = find_similar(db_path, node["id"], limit)
-    else:
-        results = similarity_search(db_path, target, limit, repo)
+    try:
+        if node:
+            results = find_similar(db_path, node["id"], limit)
+        else:
+            results = similarity_search(db_path, target.strip(), limit, repo)
+    except Exception as e:
+        return _error(f"Similar failed: {e}")
 
     if not results:
-        return "No similar nodes found. Run 'cartographer embed' first."
-    lines = [f"Similar to '{target}':"]
-    for r in results:
-        lines.append(f"  [{r['type']}] {r['name']}  (score: {r['similarity']})")
-        if r.get("file_path"):
-            lines.append(f"      {r['file_path']}")
-    return "\n".join(lines)
+        return _empty(f"No similar nodes for '{target}'", "Run `cartographer embed` first (CLI) or try keyword search")
+    data={"target":target,"count":len(results),"results":results}
+    human=[f"Similar to '{target}': {len(results)} results"]
+    for r in results[:3]:
+        human.append(f"  [{r['type']}] {r['name']} (score {r.get('similarity','?')})")
+    return json.dumps({"status":"ok","human":"\n".join(human),"data":data}, ensure_ascii=False, indent=2)
 
 
 @mcp().tool(
     name="ask",
-    description="Ask a natural language question about the repository",
+    description="Ask a natural language question about the repository (intent-aware). Handles: 'what is architecture', 'explain X', 'what depends on X', 'summarize', etc. Params: query (required, e.g. 'explain UserService'), repo, limit (1-100), max_tokens (0=no limit). Returns answer string. Example: ask(query=\"What does UserService do?\")",
 )
 def ask(
     query: str,
@@ -340,13 +513,21 @@ def ask(
     max_tokens: int = 0,
     db: str | None = None,
 ) -> str:
-    result = execute_query(query, _db(db), repo, limit, max_tokens)
-    return result
+    if not query or not query.strip():
+        return _error("query is required", "Example: ask(query=\"What is the architecture?\")")
+    limit=_clamp(limit,1,100,20)
+    max_tokens=max(0, int(max_tokens) if isinstance(max_tokens,int) else 0)
+    try:
+        result = execute_query(query.strip(), _db(db), repo, limit, max_tokens)
+        # execute_query returns string; wrap in JSON envelope for LLM
+        return _ok({"query":query,"answer":result})
+    except Exception as e:
+        return _error(f"Ask failed: {e}")
 
 
 @mcp().tool(
     name="graph_data",
-    description="Export graph data as JSON. Supports pagination, dir filter, and node expansion.",
+    description="Export graph data as JSON for visualization. Supports pagination and filtering. Params: repo, limit (1-500), offset (pagination), dir (filter by directory prefix e.g. 'src/'), expand_node_id (expand neighbors of node). Returns JSON {nodes, edges, total_nodes, total_edges, directories}. Example: graph_data(limit=80, dir=\"src/\")",
 )
 def graph_data(
     repo: str | None = None,
@@ -357,6 +538,8 @@ def graph_data(
     db: str | None = None,
 ) -> str:
     import json as _json
+    limit=_clamp(limit,1,500,80)
+    offset=max(0, int(offset) if isinstance(offset,int) else 0)
     conn = _get_conn(db)
 
     if repo:
@@ -370,7 +553,7 @@ def graph_data(
 
     if not row:
         conn.close()
-        return _json.dumps({"error": "Repository not found"})
+        return _error("Repository not found", "Run status() or list_repos() to see available repos")
 
     repo_id = row[0]
 
@@ -382,11 +565,14 @@ def graph_data(
 
     all_ids: list[int] = []
 
-    # Mode 1: expand node neighbors
     if expand_node_id is not None:
+        try:
+            expand_node_id=int(expand_node_id)
+        except Exception:
+            conn.close()
+            return _error("expand_node_id must be integer")
         all_ids = _graph_expand_node(conn, repo_id, expand_node_id, limit)
 
-    # Mode 2: standard hub-based graph with pagination and dir filter
     else:
         all_ids = _graph_hub_nodes(conn, repo_id, limit, offset, dir)
 
@@ -394,7 +580,7 @@ def graph_data(
         conn.close()
         empty = {"nodes": [], "edges": [],
                  "total_nodes": 0, "total_edges": 0, "node_types": type_counts}
-        return _json.dumps(empty)
+        return _ok(empty)
 
     ph = ",".join("?" for _ in all_ids)
     nodes_list = conn.execute(
@@ -418,7 +604,6 @@ def graph_data(
         "SELECT COUNT(*) FROM edges WHERE repository_id = ?", (repo_id,)
     ).fetchone()[0]
 
-    # Collect directory stats via SQL GROUP BY (efficient for large repos)
     dir_rows = conn.execute(
         """SELECT
             CASE WHEN INSTR(SUBSTR(file_path, 1, LENGTH(file_path) - 1), '/') > 0
@@ -435,20 +620,20 @@ def graph_data(
     dirs = [(r[0], r[1]) for r in dir_rows]
 
     conn.close()
-    return _json.dumps({
+    data={
         "total_nodes": total_nodes,
         "total_edges": total_edges,
         "node_types": type_counts,
         "nodes": [{"id": n[0], "name": n[1], "type": n[2], "file_path": n[3]} for n in nodes_list],
         "edges": [{"source": e[0], "target": e[1], "type": e[2]} for e in edges],
         "directories": [{"path": p, "count": c} for p, c in dirs],
-    })
+    }
+    return _ok(data)
 
 
 def _graph_expand_node(
     conn: sqlite3.Connection, repo_id: int, node_id: int, limit: int,
 ) -> list[int]:
-    """Fetch a specific node and its immediate neighbors."""
     ids: list[int] = [node_id]
     rows = conn.execute(
         """SELECT DISTINCT
@@ -470,19 +655,12 @@ def _graph_hub_nodes(
     conn: sqlite3.Connection, repo_id: int, limit: int, offset: int,
     dir_filter: str | None,
 ) -> list[int]:
-    """Select high-degree hub nodes + neighbors, with pagination + dir filter.
-
-    Uses a pre-aggregated degree CTE for O(n+m) performance instead of
-    O(n*m) correlated subqueries.
-    """
     dir_clause = ""
     dir_params: list = []
     if dir_filter:
         dir_clause = "AND n.file_path LIKE ?"
         dir_params.append(dir_filter + "%")
 
-    # Pre-compute degree for all nodes in this repo via a single JOIN
-    # degree CTE: node_id -> number of connected edges
     hub_count = max(5, limit // 8)
     seeds = conn.execute(
         f"""WITH degree AS (
@@ -516,7 +694,6 @@ def _graph_hub_nodes(
             if r[0] not in all_ids and len(all_ids) < limit:
                 all_ids.append(r[0])
 
-    # If still room, add next highest-degree nodes using the same CTE approach
     if all_ids and len(all_ids) < limit:
         ph = ",".join("?" for _ in all_ids)
         remaining = conn.execute(
@@ -542,35 +719,36 @@ def _graph_hub_nodes(
 
 @mcp().tool(
     name="index",
-    description="Index a repository. Run this before querying a new repo.",
+    description="Index a repository. Run before querying a new repo. Idempotent — safe to call multiple times. Params: path (default '.'), db (optional). Returns JSON {files, directories, duration_ms}. Example: index(path=\"/path/to/repo\") or index(path=\".\")",
 )
 def index_repo(
     path: str = ".",
     db: str | None = None,
 ) -> str:
-    result = index_repository(path, db_path=_db(db))
+    if not path:
+        path="."
+    try:
+        result = index_repository(path, db_path=_db(db))
+    except Exception as e:
+        return _error(f"Indexing failed: {e}")
     if not result.success:
-        lines = [f"Indexing failed for {path}:"]
-        lines.extend(f"  Error: {e}" for e in result.errors)
-        return "\n".join(lines)
+        return _error(f"Indexing failed for {path}: {result.errors}", "Check path exists and is readable")
     manifest = result.manifest
-    lines = [
-        f"Indexed {manifest.total_files} files in {manifest.total_dirs} directories",
-        f"Duration: {result.duration_ms}ms",
-    ]
-    if manifest.languages:
-        active = {
-            k: v for k, v in sorted(manifest.languages.items(), key=lambda x: -x[1])
-            if k.value != "unknown" and v > 0
-        }
-        if active:
-            lines.append("Languages: " + ", ".join(f"{k.value}: {v}" for k, v in active.items()))
-    return "\n".join(lines)
+    data={
+        "path": str(Path(path).resolve()),
+        "files": manifest.total_files if manifest else 0,
+        "directories": manifest.total_dirs if manifest else 0,
+        "duration_ms": result.duration_ms,
+        "languages": {k.value: v for k,v in (manifest.languages or {}).items() if v>0} if manifest else {},
+        "frameworks": [{"name": fw.name, "confidence": fw.confidence} for fw in (manifest.frameworks or [])],
+        "errors": result.errors,
+    }
+    return _ok(data, hint="Use summarize() or status() to verify")
 
 
 @mcp().tool(
     name="context",
-    description="Generate a structured context package (graph + architecture + key nodes)",
+    description="Generate a structured context package (graph + architecture + key nodes) — LLM-optimized. Params: repo, top_n (default 10), max_tokens (1500), db. Returns compressed text plus JSON. Use for giving LLM a repo overview in one call. Example: context(top_n=20)",
 )
 def context_package(
     repo: str | None = None,
@@ -581,10 +759,12 @@ def context_package(
     from cartographer.compression.engine import build_context_package
     from cartographer.retrieval.summarizer import generate_summary
 
+    top_n=_clamp(top_n,1,50,10)
+    max_tokens=max(200, min(max_tokens, 8000)) if isinstance(max_tokens,int) else 1500
     db_path = _db(db)
     summary = generate_summary(db_path, repo)
     if not summary:
-        return "No repository found. Run 'cartographer index' first."
+        return _empty("No repository found", "Run index(path=\".\") first")
 
     arch = None
     try:
@@ -603,30 +783,41 @@ def context_package(
         pass
 
     result = build_context_package(summary, arch, top_nodes, max_tokens)
-    return result
+    # also return structured JSON for LLM parsing
+    data={"summary":summary,"architecture":arch,"top_nodes":top_nodes,"compressed":result}
+    return json.dumps({"status":"ok","human":result,"data":data}, ensure_ascii=False, indent=2)
 
 
 @mcp().tool(
     name="update_index",
-    description="Incrementally re-index a single file after changes",
+    description="Incrementally re-index a single file after changes. Params: file_path (required, absolute or repo-relative), db optional. Use after editing a file instead of full re-index. Example: update_index(file_path=\"src/main.py\")",
 )
 def update_index_tool(
     file_path: str,
     db: str | None = None,
 ) -> str:
+    if not file_path:
+        return _error("file_path is required")
     from cartographer.ingestion.engine import update_index
-    result = update_index(file_path, db_path=_db(db))
-    return json.dumps(result)
+    try:
+        result = update_index(file_path, db_path=_db(db))
+    except Exception as e:
+        return _error(f"update_index failed: {e}")
+    if "error" in result:
+        return _error(result["error"], "Ensure repo is indexed and path exists")
+    return _ok(result)
 
 
 @mcp().tool(
     name="delete_file",
-    description="Remove a deleted file from the graph and re-embed",
+    description="Remove a deleted file from the graph and re-embed. Params: file_path (required), db optional. Example: delete_file(file_path=\"src/removed.py\")",
 )
 def delete_file_tool(
     file_path: str,
     db: str | None = None,
 ) -> str:
+    if not file_path:
+        return _error("file_path is required")
     from pathlib import Path as _Path
 
     from cartographer.embedding.engine import generate_embeddings
@@ -654,25 +845,33 @@ def delete_file_tool(
 
     if not repo_row:
         conn.close()
-        return json.dumps({"error": "Repository not found for path"})
+        return _error("Repository not found for path", "Check status() and ensure file is inside indexed repo")
 
     repo_id, repo_path = repo_row[0], repo_row[1]
-    rel_path = str(root.relative_to(repo_path))
+    try:
+        rel_path = str(root.relative_to(repo_path))
+    except ValueError:
+        conn.close()
+        return _error("File is not inside any indexed repo")
+
     removed = delete_file_from_graph(conn, repo_id, rel_path)
     conn.commit()
     conn.close()
 
     embed_count = 0
     if removed > 0:
-        new_count, _ = generate_embeddings(db_path)
-        embed_count = new_count
+        try:
+            new_count, _ = generate_embeddings(db_path)
+            embed_count = new_count
+        except Exception:
+            pass
 
-    return json.dumps({"nodes_removed": removed, "embeddings_generated": embed_count})
+    return _ok({"file": rel_path, "nodes_removed": removed, "embeddings_generated": embed_count})
 
 
 @mcp().tool(
     name="db_info",
-    description="Return statistics about the Cartographer database",
+    description="Return statistics about the database (size, counts). No params required. Use for diagnostics.",
 )
 def db_info_tool(
     db: str | None = None,
@@ -686,33 +885,42 @@ def db_info_tool(
         edge_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
         embed_count = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
         commit_count = conn.execute("SELECT COUNT(*) FROM commits").fetchone()[0]
-    finally:
+    except Exception as e:
         conn.close()
+        return _error(f"db_info failed: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
     size = os.path.getsize(db_path) if db_path.exists() else 0
-    return json.dumps({
+    data={
         "path": str(db_path),
         "size": size,
+        "size_human": f"{size/1024:.1f}KB" if size<1024*1024 else f"{size/1024/1024:.1f}MB",
         "repositories": repo_count,
         "nodes": node_count,
         "edges": edge_count,
         "embeddings": embed_count,
         "commits": commit_count,
-    })
+    }
+    return _ok(data)
 
 
 @mcp().tool(
     name="file_summary",
-    description="Compressed file summary for agents — replaces reading the full file. Returns entities, imports, exports, and relationships in ~200 tokens instead of ~2000.",
+    description="Compressed file summary for agents — replaces reading the full file. Returns entities, imports, exports, and relationships in ~200 tokens instead of ~2000. Params: file_path (required, e.g. 'src/main.py'), repo (optional), db optional. Saves 90% tokens. Example: file_summary(file_path=\"src/auth/service.py\")",
 )
 def file_summary_tool(
     file_path: str,
     repo: str | None = None,
     db: str | None = None,
 ) -> str:
+    if not file_path:
+        return _error("file_path is required", "Example: file_summary(file_path=\"src/main.py\")")
     import os as _os
     conn = _get_conn(db)
 
-    # Find repo
     if repo:
         repo_row = conn.execute(
             "SELECT id, path FROM repositories WHERE name = ?", (repo,)
@@ -724,33 +932,43 @@ def file_summary_tool(
 
     if not repo_row:
         conn.close()
-        return json.dumps({"error": "No repository found"})
+        return _error("No repository found", "Run index(path=\".\") first")
 
     repo_id, repo_path = repo_row[0], repo_row[1]
 
-    # Resolve file path — try absolute, then relative to repo
     fpath = file_path
+    # try exact file_path, then basename
     row = conn.execute(
         "SELECT id, name, node_type, metadata_json FROM nodes WHERE repository_id = ? AND file_path = ? AND node_type = 'file'",
         (repo_id, fpath),
     ).fetchone()
 
     if not row:
-        # Try basename match
+        # try relative to repo
+        try:
+            rel = str(Path(fpath).resolve().relative_to(repo_path)) if Path(fpath).is_absolute() else fpath
+            row = conn.execute(
+                "SELECT id, name, node_type, metadata_json FROM nodes WHERE repository_id = ? AND file_path = ? AND node_type = 'file'",
+                (repo_id, rel),
+            ).fetchone()
+            if row:
+                fpath=rel
+        except Exception:
+            pass
+
+    if not row:
         basename = _os.path.basename(fpath)
         row = conn.execute(
-            "SELECT id, name, node_type, metadata_json FROM nodes WHERE repository_id = ? AND name = ? AND node_type = 'file' AND node_type = 'file' LIMIT 1",
+            "SELECT id, name, node_type, metadata_json FROM nodes WHERE repository_id = ? AND name = ? AND node_type = 'file' LIMIT 1",
             (repo_id, basename),
         ).fetchone()
 
     if not row:
         conn.close()
-        return json.dumps({"error": f"File not found in graph: {file_path}"})
+        return _error(f"File not found in graph: {file_path}", "Check file path; try search(query=\"{basename}\") or ensure file is indexed")
 
     file_node_id = row[0]
-    file_name = row[1]
 
-    # All entities in this file
     entities = conn.execute(
         """SELECT n.name, n.node_type, n.metadata_json
            FROM nodes n
@@ -761,7 +979,6 @@ def file_summary_tool(
         (file_node_id, repo_id),
     ).fetchall()
 
-    # Outgoing imports
     imports = conn.execute(
         """SELECT t.name, t.file_path FROM edges e
            JOIN nodes t ON e.target_node_id = t.id
@@ -769,7 +986,6 @@ def file_summary_tool(
         (repo_id, file_node_id),
     ).fetchall()
 
-    # Incoming dependents (who imports this file)
     dependents = conn.execute(
         """SELECT s.name, s.file_path FROM edges e
            JOIN nodes s ON e.source_node_id = s.id
@@ -777,7 +993,6 @@ def file_summary_tool(
         (repo_id, file_node_id),
     ).fetchall()
 
-    # Internal relationships
     calls = conn.execute(
         """SELECT s.name, t.name FROM edges e
            JOIN nodes s ON e.source_node_id = s.id
@@ -800,51 +1015,45 @@ def file_summary_tool(
         (repo_id, fpath),
     ).fetchall()
 
-    # Line count from metadata
-    line_count = 0
-    if row[3]:
-        try:
-            meta = json.loads(row[3])
-            line_count = meta.get("end_line", 0) or 0
-        except (json.JSONDecodeError, TypeError):
-            pass
-
     conn.close()
 
-    # Build compressed output (~200 tokens)
-    lines = [f"FILE: {fpath}"]
-    if line_count:
-        lines.append(f"  {line_count} lines")
-
-    # Group entities by type
     by_type: dict[str, list[str]] = {}
     for e in entities:
         etype = e[1]
         ename = e[0]
         by_type.setdefault(etype, []).append(ename)
 
+    # Build both human and JSON
+    lines = [f"FILE: {fpath}"]
+    human_parts=[]
+    json_data={
+        "file": fpath,
+        "entities": {k: v for k,v in by_type.items()},
+        "imports": [{"name": i[0], "file": i[1]} for i in imports],
+        "depended_on_by": [{"name": d[0], "file": d[1]} for d in dependents],
+        "inherits": [{"from": s, "to": t} for s,t in inherits],
+        "calls": [{"from": s, "to": t} for s,t in calls],
+    }
     for etype in ["class", "interface", "function", "method", "enum", "constant", "variable"]:
         names = by_type.get(etype, [])
         if names:
             lines.append(f"  {etype.upper()}S({len(names)}): {', '.join(names[:15])}")
-
     if imports:
         imp_names = [i[0] for i in imports[:10]]
         lines.append(f"  IMPORTS: {', '.join(imp_names)}")
-
     if dependents:
         dep_names = [d[0] for d in dependents[:10]]
         lines.append(f"  DEPENDED_ON_BY: {', '.join(dep_names)}")
-
     if inherits:
         rels = [f"{s} -> {t}" for s, t in inherits[:5]]
         lines.append(f"  INHERITS/IMPLEMENTS: {', '.join(rels)}")
-
     if calls:
         call_pairs = [f"{s}()" for s, t in calls[:8]]
         lines.append(f"  CALLS: {', '.join(call_pairs)}")
+    # Token savings note
+    lines.append("  (use 90% fewer tokens than reading full file)")
 
-    return "\n".join(lines)
+    return json.dumps({"status":"ok","human":"\n".join(lines),"data":json_data}, ensure_ascii=False, indent=2)
 
 
 def main(db_path: Path | None = None, port: int | None = None) -> None:
@@ -868,3 +1077,4 @@ def main(db_path: Path | None = None, port: int | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+

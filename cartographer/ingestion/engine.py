@@ -145,26 +145,75 @@ _LANG_EXTENSIONS: dict[Language, tuple[str, ...]] = {
     Language.JULIA: (".jl",),
     Language.ZIG: (".zig",),
     Language.GROOVY: (".groovy", ".gvy", ".gsh"),
+    Language.DART: (".dart",),
+    Language.MARKDOWN: (".md", ".markdown", ".mdx"),
+    Language.YAML: (".yaml", ".yml"),
+    Language.JSON: (".json",),
+    Language.TOML: (".toml",),
+    Language.SQL: (".sql",),
+    Language.HTML: (".html", ".htm"),
+    Language.CSS: (".css", ".scss", ".less"),
+    Language.SHELL: (".sh", ".bash", ".zsh", ".fish"),
+    Language.DOCKERFILE: (".dockerfile",),
+    Language.PROTOBUF: (".proto",),
 }
 
 LANGUAGE_EXTENSIONS: dict[Language, tuple[str, ...]] = _LANG_EXTENSIONS
+
+
+def _detect_lang_for_file(f: Path, ext_map: dict[Language, tuple[str, ...]]) -> Language:
+    ext = f.suffix.lower()
+    for known_lang, exts in ext_map.items():
+        if ext in exts:
+            return known_lang
+    name = f.name
+    lower_name = name.lower()
+    if lower_name == "dockerfile" or lower_name.startswith("dockerfile."):
+        return Language.DOCKERFILE
+    if lower_name in ("makefile", "gnumakefile"):
+        return Language.SHELL
+    if ext in (".yaml", ".yml"):
+        return Language.YAML
+    if not ext and lower_name.endswith(".md"):
+        return Language.MARKDOWN
+    from cartographer.core.models import LANGUAGE_EXTENSIONS as CORE_EXT
+
+    return CORE_EXT.get(ext, Language.UNKNOWN)
 
 
 def _parse_single_file(
     args: tuple[Path, Path, dict[Language, tuple[str, ...]]],
 ) -> tuple[ParsedFile | None, list[str]]:
     f, root, ext_map = args
-    ext = f.suffix.lower()
-    lang = Language.UNKNOWN
-    for known_lang, exts in ext_map.items():
-        if ext in exts:
-            lang = known_lang
-            break
+    lang = _detect_lang_for_file(f, ext_map)
     if lang == Language.UNKNOWN:
-        return None, []
+        from cartographer.core.models import LANGUAGE_EXTENSIONS as CORE_EXT
+
+        lang = CORE_EXT.get(f.suffix.lower(), Language.UNKNOWN)
+        if lang == Language.UNKNOWN:
+            try:
+                from cartographer.parser.languages.generic import GenericParser
+
+                lang = Language.UNKNOWN
+                parser = GenericParser(lang)
+                source, parse_errors = parser.parse_file(f)
+                if source:
+                    entities = parser.extract_entities(source, str(f.relative_to(root)))
+                    pf = ParsedFile(path=str(f.relative_to(root)), language=lang, entities=entities)
+                    return pf, parse_errors
+                return None, parse_errors
+            except Exception:
+                return None, []
+        if lang == Language.UNKNOWN:
+            return None, []
     parser = get_parser(lang)
     if not parser:
-        return None, []
+        try:
+            from cartographer.parser.languages.generic import GenericParser
+
+            parser = GenericParser(lang)
+        except Exception:
+            return None, []
     try:
         source, parse_errors = parser.parse_file(f)
         if source:
@@ -263,20 +312,35 @@ def update_index(
     if not root.is_file():
         return {"error": f"Not a file: {root}"}
 
-    ext = root.suffix.lower()
     from cartographer.core.models import LANGUAGE_EXTENSIONS
-    lang = Language.UNKNOWN
-    for known_lang, exts in LANGUAGE_EXTENSIONS.items():
-        if ext in exts:
-            lang = known_lang
-            break
 
+    lang = _detect_lang_for_file(root, {k: tuple(v) for k, v in LANGUAGE_EXTENSIONS.items() if isinstance(v, str) or True})
+    # fallback using core map directly
     if lang == Language.UNKNOWN:
-        return {"error": f"Unsupported file type: {ext}"}
+        lang = LANGUAGE_EXTENSIONS.get(root.suffix.lower(), Language.UNKNOWN)
+        if root.name.lower() == "dockerfile" or root.name.lower().startswith("dockerfile."):
+            lang = Language.DOCKERFILE
+    if lang == Language.UNKNOWN:
+        try:
+            from cartographer.parser.languages.generic import GenericParser
+
+            parser_tmp = GenericParser(lang)
+            source_tmp, _ = parser_tmp.parse_file(root)
+            if source_tmp is not None:
+                lang = Language.UNKNOWN
+            else:
+                return {"error": f"Unsupported file type: {root.suffix}"}
+        except Exception:
+            return {"error": f"Unsupported file type: {root.suffix}"}
 
     parser = get_parser(lang)
     if not parser:
-        return {"error": f"No parser for {lang.value}"}
+        try:
+            from cartographer.parser.languages.generic import GenericParser
+
+            parser = GenericParser(lang)
+        except Exception:
+            return {"error": f"No parser for {lang.value}"}
 
     source, parse_errors = parser.parse_file(root)
     if not source:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json as _json
 import logging
 import os
 import sys
@@ -79,21 +80,63 @@ def _walk_children(entity):
         yield from _walk_children(c)
 
 
-@click.group()
-@click.option("--db", default=None, help="Path to SQLite database", envvar="CARTOGRAPHER_DB")
+def _is_json(ctx) -> bool:
+    return bool(ctx.obj.get("json", False))
+
+
+def _emit(ctx, data: dict, pretty: str | None = None) -> None:
+    if _is_json(ctx):
+        click.echo(_json.dumps(data, indent=2, ensure_ascii=False))
+    elif pretty is not None:
+        click.echo(pretty)
+    else:
+        click.echo(_json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def _emit_error(ctx, message: str, hint: str | None = None, code: int = 1) -> None:
+    if _is_json(ctx):
+        payload: dict = {"status": "error", "error": message}
+        if hint:
+            payload["hint"] = hint
+        click.echo(_json.dumps(payload, indent=2), err=True)
+    else:
+        click.echo(f"Error: {message}", err=True)
+        if hint:
+            click.echo(f"Hint: {hint}", err=True)
+    raise SystemExit(code)
+
+
+def _output_or_json(ctx, pretty_lines: list[str], json_data: dict) -> None:
+    if _is_json(ctx):
+        click.echo(_json.dumps(json_data, indent=2, ensure_ascii=False))
+    else:
+        for line in pretty_lines:
+            click.echo(line)
+
+
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.option("--db", default=None, help="Path to SQLite database (or $CARTOGRAPHER_DB)", envvar="CARTOGRAPHER_DB")
+@click.option("--json", "as_json", is_flag=True, help="Output JSON (for LLM/automation). All commands support this.")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose logging")
+@click.option("--quiet", "-q", is_flag=True, help="Suppress progress output")
 @click.pass_context
-def main(ctx, db):
+def main(ctx, db, as_json, verbose, quiet):
     ctx.ensure_object(dict)
+    ctx.obj["json"] = as_json
+    ctx.obj["verbose"] = verbose
+    ctx.obj["quiet"] = quiet
+    if verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+    elif quiet or as_json:
+        logging.getLogger().setLevel(logging.WARNING)
     if db:
         ctx.obj["db_path"] = Path(db)
     elif env_db := os.environ.get("CARTOGRAPHER_DB"):
         ctx.obj["db_path"] = Path(env_db)
     else:
-        # Check for per-project config in current directory
         proj_cfg = Path.cwd() / ".cartographer" / "config.json"
         if proj_cfg.exists():
             try:
-                import json as _json
                 cfg = _json.loads(proj_cfg.read_text())
                 cfg_db = cfg.get("dbPath", "")
                 if cfg_db:
@@ -105,6 +148,88 @@ def main(ctx, db):
             except Exception:
                 pass
         ctx.obj["db_path"] = Path.home() / ".cartographer" / "index.db"
+
+
+@main.command("status")
+@click.pass_context
+def status(ctx):
+    """Show indexing status, DB health, and diagnostics (LLM-friendly with --json)."""
+    db_path = ctx.obj["db_path"]
+    from cartographer.storage.connection import get_connection, init_schema
+    import shutil
+    data: dict = {"db_path": str(db_path), "exists": db_path.exists()}
+    pretty: list[str] = []
+    pretty.append(f"Database: {db_path}")
+    if not db_path.exists():
+        pretty.append("Status: not initialized (no DB file)")
+        pretty.append("Hint: run `cartographer init` or `cartographer index .`")
+        data.update({"status": "not_initialized", "hint": "run cartographer init or index"})
+        _output_or_json(ctx, pretty, data)
+        return
+    try:
+        size = db_path.stat().st_size
+        data["size_bytes"] = size
+        pretty.append(f"Size: {_fmt_size(size)}")
+    except Exception:
+        pass
+    conn = get_connection(db_path)
+    init_schema(conn)
+    try:
+        repo_count = conn.execute("SELECT COUNT(*) FROM repositories").fetchone()[0]
+        node_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+        edge_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+        embed_count = conn.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        per_repo = conn.execute(
+            "SELECT name, path FROM repositories ORDER BY name"
+        ).fetchall()
+        data.update({
+            "repositories": [{"name": r[0], "path": r[1]} for r in per_repo],
+            "counts": {"repos": repo_count, "nodes": node_count, "edges": edge_count, "embeddings": embed_count},
+            "status": "ok" if repo_count > 0 else "empty",
+        })
+        pretty.append(f"Repositories: {repo_count}  Nodes: {node_count}  Edges: {edge_count}  Embeddings: {embed_count}")
+        if per_repo:
+            pretty.append("")
+            pretty.append("Indexed repos:")
+            for name, path in per_repo:
+                pretty.append(f"  - {name}: {path}")
+        else:
+            pretty.append("Status: DB exists but no repos indexed")
+            pretty.append("Hint: run `cartographer index /path/to/repo`")
+            data["hint"] = "run cartographer index /path/to/repo"
+        # health checks
+        import importlib.util
+        checks = []
+        for mod, label in [("tree_sitter", "tree-sitter"), ("fastembed", "fastembed"), ("mcp", "mcp")]:
+            ok = importlib.util.find_spec(mod) is not None
+            checks.append({"check": label, "ok": ok})
+        data["health"] = checks
+        pretty.append("")
+        pretty.append("Health:")
+        for c in checks:
+            pretty.append(f"  {'✓' if c['ok'] else '✗'} {c['check']}")
+        # parsers
+        from cartographer.parser.registry import supported_languages
+        langs = [l.value for l in supported_languages()]
+        data["languages"] = langs
+        pretty.append(f"Parsers: {len(langs)} languages ({', '.join(langs[:8])}…)")
+    finally:
+        conn.close()
+    _output_or_json(ctx, pretty, data)
+
+
+@main.command("doctor")
+@click.pass_context
+def doctor(ctx):
+    """Alias for `status` — diagnose setup and suggest fixes."""
+    ctx.invoke(status)
+
+
+@main.command("health")
+@click.pass_context
+def health(ctx):
+    """Alias for `status` — health check for LLM/automation."""
+    ctx.invoke(status)
 
 
 @main.command()
@@ -171,17 +296,56 @@ def init(ctx, path, force):
 @click.argument("path", default=".", type=click.Path(exists=True, file_okay=False))
 @click.pass_context
 def index(ctx, path):
-    """Index a repository into the knowledge graph."""
+    """Index a repository into the knowledge graph.
+
+    Example:
+      cartographer index .
+      cartographer --json index /path/to/repo
+      cartographer --db /tmp/my.db index .
+    """
     db_path = ctx.obj["db_path"]
     result = index_repository(path, db_path=db_path)
 
     if not result.success:
+        if _is_json(ctx):
+            _emit(ctx, {
+                "status": "error",
+                "path": str(Path(path).resolve()),
+                "errors": result.errors,
+                "hint": "Check path exists and is a git repo; see `cartographer doctor`",
+            })
+            raise SystemExit(1)
         for err in result.errors:
             click.echo(f"Error: {err}", err=True)
         if not result.manifest:
             raise click.Abort()
 
     manifest = result.manifest
+    payload = {
+        "status": "ok",
+        "path": str(Path(path).resolve()),
+        "files": manifest.total_files if manifest else 0,
+        "directories": manifest.total_dirs if manifest else 0,
+        "duration_ms": result.duration_ms,
+        "languages": {k.value: v for k, v in (manifest.languages or {}).items() if v > 0} if manifest else {},
+        "frameworks": [{"name": fw.name, "confidence": fw.confidence} for fw in (manifest.frameworks or [])],
+        "package_managers": manifest.package_managers if manifest else [],
+        "build_systems": manifest.build_systems if manifest else [],
+        "is_monorepo": manifest.is_monorepo if manifest else False,
+        "errors": result.errors,
+    }
+    if manifest and result.parsed_files:
+        payload["entities"] = {
+            "files_parsed": len(result.parsed_files),
+            "classes": _count_entities(result.parsed_files, EntityKind.CLASS),
+            "functions": _count_entities(result.parsed_files, EntityKind.FUNCTION),
+            "methods": _count_entities(result.parsed_files, EntityKind.METHOD),
+            "references": manifest.total_references,
+        }
+    if _is_json(ctx):
+        _emit(ctx, payload)
+        return
+
     click.echo(f"Indexed {manifest.total_files} files in {manifest.total_dirs} directories")
     click.echo(f"Duration: {result.duration_ms}ms")
 
@@ -225,23 +389,41 @@ def index(ctx, path):
 
     click.echo()
     click.echo("Next: run 'cartographer embed' and 'cartographer git index' for full features")
+    click.echo("Tip: use --json for LLM-friendly output, or `cartographer status --json`")
 
 
 @main.command()
 @click.argument("query")
-@click.option("--type", "-t", "node_type", help="Filter by node type")
-@click.option("--repo", "-r", help="Filter by repository name")
-@click.option("--limit", "-l", default=20, help="Max results")
-@click.option("--semantic", "-s", is_flag=True, help="Use semantic (embedding) search")
-@click.option("--max-tokens", "-m", default=0, type=int, help="Compress output to fit token budget")
+@click.option("--type", "-t", "node_type", help="Filter by node type (class, function, file, etc.)")
+@click.option("--repo", "-r", help="Filter by repository name (see `cartographer repo list`)")
+@click.option("--limit", "-l", default=20, help="Max results (1-100, default 20)")
+@click.option("--semantic", "-s", is_flag=True, help="Use semantic (embedding) search — requires `cartographer embed`")
+@click.option("--max-tokens", "-m", default=0, type=int, help="Compress output to fit token budget (0 = no limit)")
 @click.pass_context
 def ask(ctx, query, node_type, repo, limit, semantic, max_tokens):
-    """Search the knowledge graph."""
+    """Keyword search the knowledge graph (for NL questions use `query`).
+
+    Examples:
+      cartographer ask \"UserService\"
+      cartographer ask \"auth\" --type class --limit 10
+      cartographer --json ask \"UserService\" --limit 5
+      cartographer ask --semantic \"classes that handle user authentication\"
+    """
     _ensure_indexed(ctx.obj["db_path"])
+    limit = max(1, min(limit, 100))
     if semantic:
         results = similarity_search(ctx.obj["db_path"], query, limit, repo)
+        if _is_json(ctx):
+            _emit(ctx, {
+                "status": "ok" if results else "empty",
+                "query": query, "mode": "semantic",
+                "count": len(results), "results": results,
+                "hint": None if results else "Run `cartographer embed` first, or try keyword search without --semantic",
+            })
+            return
         if not results:
             click.echo("No semantic results found. Run 'cartographer embed' first.")
+            click.echo("Hint: try without --semantic for keyword search")
             return
         click.echo(f"Found {len(results)} semantic result(s):")
         for r in results:
@@ -253,9 +435,17 @@ def ask(ctx, query, node_type, repo, limit, semantic, max_tokens):
         return
 
     results = search_nodes(query, ctx.obj["db_path"], repo, node_type, limit)
-
+    if _is_json(ctx):
+        _emit(ctx, {
+            "status": "ok" if results else "empty",
+            "query": query, "mode": "keyword",
+            "count": len(results), "results": results,
+            "hint": None if results else "Try broader query, check `cartographer status`, or run `cartographer index`",
+        })
+        return
     if not results:
         click.echo("No results found.")
+        click.echo("Hint: try `cartographer status` to check indexing, or broader query")
         return
 
     if max_tokens:
@@ -268,6 +458,7 @@ def ask(ctx, query, node_type, repo, limit, semantic, max_tokens):
             if r["file_path"]:
                 click.echo(f"           {r['file_path']}")
         click.echo("  (use 'cartographer impact <id>' for impact analysis)")
+        click.echo("  Tip: `cartographer --json ask \"...\"` for LLM-friendly JSON")
 
 
 @main.command()
@@ -276,12 +467,23 @@ def ask(ctx, query, node_type, repo, limit, semantic, max_tokens):
 @click.option("--max-tokens", "-m", default=0, type=int, help="Compress output to fit token budget")
 @click.pass_context
 def impact(ctx, target, repo, max_tokens):
-    """Analyze what depends on a given file or symbol."""
+    """Analyze what depends on a given file or symbol.
+
+    Example: cartographer impact UserService
+    JSON: cartographer --json impact app/models.py
+    """
     _ensure_indexed(ctx.obj["db_path"])
     results = impact_analysis(target, ctx.obj["db_path"], repo)
-
+    if _is_json(ctx):
+        _emit(ctx, {
+            "status": "ok" if results else "empty",
+            "target": target, "count": len(results), "dependents": results,
+            "hint": None if results else "Try file path, `cartographer search <name>` to find exact symbol",
+        })
+        return
     if not results:
         click.echo("No dependents found.")
+        click.echo(f"Hint: try `cartographer search \"{target}\"` to find exact name")
         return
 
     if max_tokens:
@@ -303,25 +505,34 @@ def impact(ctx, target, repo, max_tokens):
 @main.command()
 @click.argument("name")
 @click.option("--repo", "-r", help="Repository name")
-@click.option("--depth", "-d", default=2, help="Traversal depth")
+@click.option("--depth", "-d", default=2, help="Traversal depth (1-5)")
 @click.option("--max-tokens", "-m", default=0, type=int, help="Compress output to fit token budget")
 @click.pass_context
 def neighbors(ctx, name, repo, depth, max_tokens):
-    """Show neighbors of a node in the graph."""
+    """Show neighboring nodes of a class, function, or file.
+
+    Example: cartographer neighbors UserService --depth 2
+    """
     _ensure_indexed(ctx.obj["db_path"])
     from cartographer.storage.connection import get_connection
-
+    depth = max(1, min(depth, 5))
     conn = get_connection(ctx.obj["db_path"])
     node = _resolve_target(conn, name, repo)
     conn.close()
 
     if not node:
+        if _is_json(ctx):
+            _emit(ctx, {"status": "empty", "error": f"No node matching '{name}'", "hint": f"Try `cartographer search \"{name}\"`", "target": name})
+            return
         click.echo(f"No node found matching '{name}'.")
+        click.echo(f"Hint: try `cartographer search \"{name}\"`")
         return
 
-    click.echo(f"Neighbors of [{node['type']}] {node['name']}:")
     results = get_neighbors(node["id"], ctx.obj["db_path"], depth)
-
+    if _is_json(ctx):
+        _emit(ctx, {"status": "ok", "node": node, "depth": depth, "count": len(results), "neighbors": results})
+        return
+    click.echo(f"Neighbors of [{node['type']}] {node['name']}:")
     if max_tokens:
         click.echo(compress(results, max_tokens, "nodes"))
         return
@@ -338,14 +549,23 @@ def neighbors(ctx, name, repo, depth, max_tokens):
 @click.option("--max-tokens", "-m", default=0, type=int, help="Compress output to fit token budget")
 @click.pass_context
 def summarize(ctx, repo, max_tokens):
-    """Generate repository summary from the knowledge graph."""
+    """Generate repository summary from the knowledge graph.
+
+    Example: cartographer summarize
+             cartographer --json summarize
+    """
     _ensure_indexed(ctx.obj["db_path"])
     summary = generate_summary(ctx.obj["db_path"], repo)
 
     if not summary:
+        if _is_json(ctx):
+            _emit(ctx, {"status": "empty", "error": "No repository found. Run 'cartographer index' first.", "hint": "run cartographer index /path/to/repo"})
+            return
         click.echo("No repository found. Run 'cartographer index' first.")
         return
-
+    if _is_json(ctx):
+        _emit(ctx, {"status": "ok", "summary": summary})
+        return
     if max_tokens:
         click.echo(compress(summary, max_tokens, "summary"))
         return
@@ -380,10 +600,17 @@ def summarize(ctx, repo, max_tokens):
 @click.option("--top-n", default=10, type=int, help="Number of key nodes to include")
 @click.pass_context
 def context(ctx, repo, max_tokens, top_n):
-    """Generate a structured context package (graph + architecture + key nodes)."""
+    """Generate a structured context package (graph + architecture + key nodes).
+
+    LLM-optimized: use --json for full structured JSON; default is compressed text.
+    Example: cartographer --json context --top-n 20
+    """
     _ensure_indexed(ctx.obj["db_path"])
     summary = generate_summary(ctx.obj["db_path"], repo)
     if not summary:
+        if _is_json(ctx):
+            _emit(ctx, {"status": "empty", "error": "No repository found. Run 'cartographer index' first."})
+            return
         click.echo("No repository found. Run 'cartographer index' first.")
         return
 
@@ -403,6 +630,9 @@ def context(ctx, repo, max_tokens, top_n):
     except Exception:
         pass
 
+    if _is_json(ctx):
+        _emit(ctx, {"status": "ok", "summary": summary, "architecture": arch, "top_nodes": top_nodes})
+        return
     result = build_context_package(summary, arch, top_nodes, max_tokens)
     click.echo(result)
 
@@ -410,17 +640,29 @@ def context(ctx, repo, max_tokens, top_n):
 @main.command()
 @click.argument("from_name")
 @click.argument("to_name")
-@click.option("--max-depth", default=5)
+@click.option("--max-depth", default=5, help="Max traversal depth (1-10)")
 @click.option("--max-tokens", "-m", default=0, type=int, help="Compress output to fit token budget")
 @click.option("--repo", "-r", help="Repository name")
 @click.pass_context
 def path(ctx, from_name, to_name, max_depth, max_tokens, repo):
-    """Find path between two nodes."""
-    _ensure_indexed(ctx.obj["db_path"])
-    results = find_path(from_name, to_name, ctx.obj["db_path"], repo_name=repo, max_depth=max_depth)
+    """Find the shortest path between two nodes.
 
+    Example: cartographer path UserController Database
+    """
+    _ensure_indexed(ctx.obj["db_path"])
+    max_depth = max(1, min(max_depth, 10))
+    results = find_path(from_name, to_name, ctx.obj["db_path"], repo_name=repo, max_depth=max_depth)
+    if _is_json(ctx):
+        _emit(ctx, {
+            "status": "ok" if results else "empty",
+            "from": from_name, "to": to_name, "max_depth": max_depth,
+            "count": len(results), "path": results,
+            "hint": None if results else f"Try `cartographer search \"{from_name}\"` / `\"{to_name}\"` to verify names",
+        })
+        return
     if not results:
         click.echo("No path found.")
+        click.echo(f"Hint: verify names via `cartographer search \"{from_name}\"`")
         return
 
     if max_tokens:
@@ -439,7 +681,19 @@ def path(ctx, from_name, to_name, max_depth, max_tokens, repo):
 @click.option("--repo", "-r", help="Repository name")
 @click.pass_context
 def embed(ctx, repo):
-    """Generate vector embeddings for semantic search."""
+    """Generate vector embeddings for semantic search.
+
+    Example: cartographer embed
+             cartographer --json embed
+    """
+    if _is_json(ctx):
+        try:
+            new_count, skip_count = generate_embeddings(ctx.obj["db_path"], repo)
+            _emit(ctx, {"status": "ok", "embedded": new_count, "skipped": skip_count})
+        except Exception as e:
+            _emit(ctx, {"status": "error", "error": str(e), "hint": "Check embedding model download; see CARTOGRAPHER_EMBEDDING_MODEL"})
+            raise SystemExit(1)
+        return
     click.echo("Embedding...")
     try:
         new_count, skip_count = generate_embeddings(ctx.obj["db_path"], repo)
@@ -451,16 +705,21 @@ def embed(ctx, repo):
             click.echo(f"Skipped {skip_count} already-embedded nodes.")
     except Exception as e:
         click.echo(f"Embedding failed: {e}", err=True)
+        click.echo("Hint: check embedding model (CARTOGRAPHER_EMBEDDING_MODEL) and network", err=True)
 
 
 @main.command()
 @click.argument("target")
 @click.option("--repo", "-r", help="Repository name")
-@click.option("--limit", "-l", default=20, help="Max results")
+@click.option("--limit", "-l", default=20, help="Max results (1-100)")
 @click.pass_context
 def similar(ctx, target, repo, limit):
-    """Find semantically similar nodes."""
+    """Find semantically similar nodes (requires `cartographer embed`).
+
+    Example: cartographer similar UserService
+    """
     _ensure_indexed(ctx.obj["db_path"])
+    limit = max(1, min(limit, 100))
     from cartographer.storage.connection import get_connection
 
     conn = get_connection(ctx.obj["db_path"])
@@ -472,8 +731,16 @@ def similar(ctx, target, repo, limit):
     else:
         results = similarity_search(ctx.obj["db_path"], target, limit, repo)
 
+    if _is_json(ctx):
+        _emit(ctx, {
+            "status": "ok" if results else "empty",
+            "target": target, "count": len(results), "results": results,
+            "hint": None if results else "Run `cartographer embed` first, or the target may not exist",
+        })
+        return
     if not results:
         click.echo("No similar nodes found. Run 'cartographer embed' first.")
+        click.echo("Hint: ensure `cartographer embed` has been run for this repo")
         return
 
     click.echo(f"Similar to '{target}':")
@@ -487,17 +754,31 @@ def similar(ctx, target, repo, limit):
 
 @main.command()
 @click.option("--repo", "-r", help="Repository name")
-@click.option("--detect", is_flag=True, help="Run architecture detection")
-@click.option("--verbose", "-v", is_flag=True, help="Show detailed evidence")
+@click.option("--detect", is_flag=True, help="Run architecture detection (writes to DB)")
+@click.option("--verbose", is_flag=True, help="Show detailed evidence")
 @click.pass_context
 def architecture(ctx, repo, detect, verbose):
-    """Show or detect repository architecture."""
+    """Show or detect repository architecture.
+
+    Example: cartographer architecture --detect
+             cartographer --json architecture --detect
+    """
+    if _is_json(ctx) and not detect:
+        # in json mode, --detect is implied for freshness; still allow cached read
+        pass
     _ensure_indexed(ctx.obj["db_path"])
     if detect:
-        click.echo("Detecting architecture...")
+        if not _is_json(ctx):
+            click.echo("Detecting architecture...")
         result = detect_architecture(ctx.obj["db_path"], repo)
         if "error" in result:
+            if _is_json(ctx):
+                _emit(ctx, {"status": "error", "error": result["error"], "hint": "Run `cartographer index` first"})
+                return
             click.echo(result["error"])
+            return
+        if _is_json(ctx):
+            _emit(ctx, {"status": "ok", **result})
             return
 
         click.echo(f"Architecture for {result['repository']}:")
@@ -566,6 +847,12 @@ def architecture(ctx, repo, detect, verbose):
         return
 
     result = get_architecture(ctx.obj["db_path"], repo)
+    if _is_json(ctx):
+        if "error" in result:
+            _emit(ctx, {"status": "error", "error": result["error"], "hint": "Run `cartographer architecture --detect`"})
+            return
+        _emit(ctx, {"status": "ok", **result})
+        return
     if "error" in result:
         click.echo(result["error"])
         return
@@ -593,31 +880,48 @@ def architecture(ctx, repo, detect, verbose):
 
 
 @main.command()
-def version():
+@click.pass_context
+def version(ctx):
     """Show Cartographer version."""
     try:
         from importlib.metadata import version as _v
         v = _v("cartographer")
     except Exception:
         v = "0.1.0"
-    click.echo(f"cartographer {v}")
+    if _is_json(ctx):
+        _emit(ctx, {"status": "ok", "version": v})
+    else:
+        click.echo(f"cartographer {v}")
 
 
 @main.command()
 @click.argument("query_str")
 @click.option("--repo", "-r", help="Repository name")
-@click.option("--limit", "-l", default=20, help="Max results per step")
+@click.option("--limit", "-l", default=20, help="Max results per step (1-100)")
 @click.option("--max-tokens", "-m", default=0, type=int, help="Compress output to fit token budget")
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed reasoning")
 @click.pass_context
 def query(ctx, query_str, repo, limit, max_tokens, verbose):
-    """Ask a natural language question about the repository."""
+    """Ask a natural language question about the repository (LLM-friendly).
+
+    Examples:
+      cartographer query \"what is the architecture\"
+      cartographer --json query \"explain UserService\" --limit 10
+    """
     _ensure_indexed(ctx.obj["db_path"])
+    limit = max(1, min(limit, 100))
     try:
         result = execute_query(query_str, ctx.obj["db_path"], repo, limit, max_tokens)
-        click.echo(result)
+        if _is_json(ctx):
+            _emit(ctx, {"status": "ok", "query": query_str, "result": result})
+        else:
+            click.echo(result)
     except Exception as e:
+        if _is_json(ctx):
+            _emit(ctx, {"status": "error", "error": str(e), "hint": "Check `cartographer status` and ensure repo is indexed"})
+            raise SystemExit(1)
         click.echo(f"Query failed: {e}", err=True)
+        click.echo("Hint: run `cartographer status` to check indexing", err=True)
 
 
 # ── mcp commands ────────────────────────────────────────────────────────────────
@@ -1080,10 +1384,17 @@ def watch(ctx, path, verbose):
 
         @staticmethod
         def _handle(file_path: str, change_type: str, is_deletion: bool = False):
-            if not file_path.endswith((".py", ".js", ".ts", ".tsx", ".go", ".rs",
-                                       ".java", ".kt", ".cs", ".php", ".rb",
-                                       ".c", ".cpp", ".h", ".swift", ".scala",
-                                       ".ex", ".lua", ".jl", ".zig", ".groovy")):
+            from cartographer.core.models import LANGUAGE_EXTENSIONS
+            watched_exts = tuple(LANGUAGE_EXTENSIONS.keys()) + (
+                ".md", ".markdown", ".mdx", ".yaml", ".yml", ".json", ".toml",
+                ".sql", ".html", ".htm", ".css", ".scss", ".less", ".sh",
+                ".bash", ".zsh", ".fish", ".proto", ".dockerfile",
+            )
+            # also handle Dockerfile/makefile without extension
+            base = Path(file_path).name.lower()
+            if base in ("dockerfile", "makefile", "gnumakefile"):
+                pass
+            elif not file_path.lower().endswith(watched_exts):
                 return
             try:
                 rel = str(Path(file_path).relative_to(_resolved))

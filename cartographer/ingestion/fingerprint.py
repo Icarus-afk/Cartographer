@@ -119,6 +119,20 @@ FRAMEWORK_RULES: list[dict[str, Any]] = [
             {"file": "bin/rails", "weight": 0.5},
         ],
     },
+    {
+        "name": "Flutter",
+        "indicators": [
+            {"file": "pubspec.yaml", "content": r"flutter", "weight": 0.7},
+            {"file": "lib/main.dart", "weight": 0.5},
+        ],
+    },
+    {
+        "name": "Dart",
+        "indicators": [
+            {"file": "pubspec.yaml", "content": r"dart", "weight": 0.4},
+            {"file": "analysis_options.yaml", "weight": 0.3},
+        ],
+    },
 ]
 
 

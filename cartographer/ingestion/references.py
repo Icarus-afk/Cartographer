@@ -106,6 +106,25 @@ IMPORT_PATTERNS["groovy"] = [
     ("import", _compile(r"^\s*import\s+(?:static\s+)?(\S+)"), 1),
 ]
 
+IMPORT_PATTERNS["dart"] = [
+    ("import", _compile(r"^\s*import\s+['\"]([^'\"]+)['\"]"), 1),
+    ("part", _compile(r"^\s*part\s+['\"]([^'\"]+)['\"]"), 1),
+    ("export", _compile(r"^\s*export\s+['\"]([^'\"]+)['\"]"), 1),
+]
+
+IMPORT_PATTERNS["markdown"] = []
+IMPORT_PATTERNS["yaml"] = []
+IMPORT_PATTERNS["json"] = []
+IMPORT_PATTERNS["toml"] = []
+IMPORT_PATTERNS["sql"] = []
+IMPORT_PATTERNS["html"] = []
+IMPORT_PATTERNS["css"] = []
+IMPORT_PATTERNS["shell"] = []
+IMPORT_PATTERNS["dockerfile"] = []
+IMPORT_PATTERNS["protobuf"] = [
+    ("import", _compile(r'^\s*import\s+"([^"]+)"'), 1),
+]
+
 FILE_EXTENSIONS: dict[str, list[str]] = {
     "python": [".py"],
     "javascript": [".js", ".jsx", ".mjs", ".cjs"],
@@ -127,6 +146,17 @@ FILE_EXTENSIONS: dict[str, list[str]] = {
     "julia": [".jl"],
     "zig": [".zig"],
     "groovy": [".groovy", ".gvy", ".gsh"],
+    "dart": [".dart"],
+    "markdown": [".md", ".markdown", ".mdx"],
+    "yaml": [".yaml", ".yml"],
+    "json": [".json"],
+    "toml": [".toml"],
+    "sql": [".sql"],
+    "html": [".html", ".htm"],
+    "css": [".css", ".scss", ".less"],
+    "shell": [".sh", ".bash", ".zsh", ".fish"],
+    "dockerfile": [".dockerfile"],
+    "protobuf": [".proto"],
 }
 
 MODULE_INDICATORS: dict[str, list[str]] = {
@@ -150,6 +180,17 @@ MODULE_INDICATORS: dict[str, list[str]] = {
     "julia": [],
     "zig": [],
     "groovy": [],
+    "dart": [],
+    "markdown": [],
+    "yaml": [],
+    "json": [],
+    "toml": [],
+    "sql": [],
+    "html": [],
+    "css": [],
+    "shell": [],
+    "dockerfile": [],
+    "protobuf": [],
 }
 
 

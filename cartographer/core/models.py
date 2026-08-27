@@ -25,6 +25,17 @@ class Language(str, Enum):
     JULIA = "julia"
     ZIG = "zig"
     GROOVY = "groovy"
+    DART = "dart"
+    MARKDOWN = "markdown"
+    YAML = "yaml"
+    JSON = "json"
+    TOML = "toml"
+    SQL = "sql"
+    HTML = "html"
+    CSS = "css"
+    SHELL = "shell"
+    DOCKERFILE = "dockerfile"
+    PROTOBUF = "protobuf"
     UNKNOWN = "unknown"
 
 
@@ -62,6 +73,26 @@ LANGUAGE_EXTENSIONS: dict[str, Language] = {
     ".groovy": Language.GROOVY,
     ".gvy": Language.GROOVY,
     ".gsh": Language.GROOVY,
+    ".dart": Language.DART,
+    ".md": Language.MARKDOWN,
+    ".markdown": Language.MARKDOWN,
+    ".mdx": Language.MARKDOWN,
+    ".yaml": Language.YAML,
+    ".yml": Language.YAML,
+    ".json": Language.JSON,
+    ".toml": Language.TOML,
+    ".sql": Language.SQL,
+    ".html": Language.HTML,
+    ".htm": Language.HTML,
+    ".css": Language.CSS,
+    ".scss": Language.CSS,
+    ".less": Language.CSS,
+    ".sh": Language.SHELL,
+    ".bash": Language.SHELL,
+    ".zsh": Language.SHELL,
+    ".fish": Language.SHELL,
+    ".proto": Language.PROTOBUF,
+    ".dockerfile": Language.DOCKERFILE,
 }
 
 
