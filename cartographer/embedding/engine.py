@@ -418,18 +418,48 @@ def similarity_search(
         logger.warning("Score computation failed: %s", exc)
         return []
 
-    # hybrid boost: if top score is low (<0.35), blend with keyword overlap for better recall
+    # hybrid boost: always blend vector cosine with keyword overlap + type priority for better recall
+    # This fixes cases where pure cosine misses exact name matches due to embedding vagueness
     try:
-        top_raw = float(np.max(scores)) if len(scores) else 0.0
-        if top_raw < 0.35:
-            q_words = set(query.lower().split())
-            if q_words:
-                for i, rec in enumerate(records):
-                    name_words = set((rec.get("name") or "").lower().split())
-                    file_words = set((rec.get("file_path") or "").lower().split("/"))
-                    overlap = len(q_words & (name_words | file_words))
-                    if overlap:
-                        scores[i] += 0.1 * overlap  # small boost
+        import re
+
+        def _tok(s: str) -> set[str]:
+            # split camelCase, snake, slash, dot
+            if not s:
+                return set()
+            s = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", s)
+            s = re.sub(r"[^a-zA-Z0-9]+", " ", s)
+            return set(s.lower().split())
+
+        q_words = _tok(query)
+        # type priority similar to searcher
+        _type_boost = {
+            "class": 0.05,
+            "interface": 0.05,
+            "controller": 0.08,
+            "service": 0.06,
+            "api_endpoint": 0.08,
+            "function": 0.03,
+            "method": 0.03,
+        }
+        for i, rec in enumerate(records):
+            boost = 0.0
+            name_words = _tok(rec.get("name") or "")
+            file_words = _tok(rec.get("file_path") or "")
+            overlap = len(q_words & (name_words | file_words))
+            if overlap:
+                # scale by overlap ratio, not just count
+                boost += 0.12 * overlap / max(len(q_words), 1)
+                # exact name match bonus
+                if query.lower().strip() == (rec.get("name") or "").lower():
+                    boost += 0.15
+                elif query.lower().strip() in (rec.get("name") or "").lower():
+                    boost += 0.08
+            # type priority
+            t = rec.get("type") or ""
+            boost += _type_boost.get(t, 0.0) * 0.5  # smaller
+            if boost:
+                scores[i] += boost
     except Exception:
         pass
 

@@ -110,6 +110,9 @@ def build_graph(
     file_cache: dict[str, int] = {}
     node_rows: list[tuple[int, int, str, str, str, str | None]] = []
     edge_rows: list[tuple[int, int, int, int, str]] = []
+    name_to_entries: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    entity_key_to_id: dict[tuple[str, str], int] = {}
+    # backwards compat alias for tests that may inspect
     name_to_entity_ids: dict[str, list[int]] = defaultdict(list)
 
     def _batch_node(kind: EntityKind, name: str, file_path: str, metadata: dict) -> int:
@@ -120,6 +123,8 @@ def build_graph(
             actual_id, repo_id, kind.value, name, file_path,
             json.dumps(metadata) if metadata else None,
         ))
+        name_to_entries[name].append((actual_id, file_path))
+        entity_key_to_id[(name, file_path)] = actual_id
         name_to_entity_ids[name].append(actual_id)
         return actual_id
 
@@ -162,6 +167,8 @@ def build_graph(
         for entity in pf.entities:
             _process_entity(entity, stats, file_id, pf.path, _batch_node, _batch_edge)
 
+    # file-level import map for relationship disambiguation
+    file_imports: dict[str, set[str]] = defaultdict(set)
     if references:
         for ref in references:
             source_id = file_cache.get(ref["source"])
@@ -169,8 +176,10 @@ def build_graph(
             if source_id and target_id and source_id != target_id:
                 _batch_edge(source_id, target_id, "IMPORTS")
                 stats["edges"] += 1
+            # for disambiguation, even if file ids missing (e.g. generic files not in cache), record
+            file_imports[ref["source"]].add(ref["target"])
 
-    _resolve_relationships(parsed_files, name_to_entity_ids, stats, _batch_edge)
+    _resolve_relationships(parsed_files, name_to_entries, entity_key_to_id, file_imports, stats, _batch_edge)
 
     # chunked inserts to avoid huge transactions and SQLITE_BUSY
     CHUNK = 1000
@@ -275,35 +284,100 @@ def _manifest_to_json(manifest: RepositoryManifest) -> str:
     })
 
 
+def _common_prefix_len(a: str, b: str) -> int:
+    """Length of common directory prefix (number of shared leading path segments)."""
+    a_parts = a.split("/")[:-1]  # directory parts
+    b_parts = b.split("/")[:-1]
+    common = 0
+    for x, y in zip(a_parts, b_parts):
+        if x == y:
+            common += 1
+        else:
+            break
+    return common
+
+
+def _pick_best_candidate(
+    candidates: list[tuple[int, str]],
+    source_file: str,
+    imported_files: set[str],
+) -> int:
+    """Pick best target among name collisions.
+
+    Priority:
+    1. Same file (self-contained reference)
+    2. Directly imported file (from references)
+    3. Longest common directory prefix
+    4. Fallback first candidate
+    """
+    if len(candidates) == 1:
+        return candidates[0][0]
+    # 1. same file
+    for cid, fpath in candidates:
+        if fpath == source_file:
+            return cid
+    # 2. imported
+    if imported_files:
+        for cid, fpath in candidates:
+            if fpath in imported_files:
+                return cid
+        # also handle imported as basename without dir (e.g. import utils)
+        imported_basenames = {p.split("/")[-1] for p in imported_files}
+        for cid, fpath in candidates:
+            if fpath.split("/")[-1] in imported_basenames:
+                return cid
+    # 3. directory proximity
+    best = candidates[0]
+    best_score = _common_prefix_len(source_file, best[1])
+    for cid, fpath in candidates[1:]:
+        score = _common_prefix_len(source_file, fpath)
+        if score > best_score:
+            best = (cid, fpath)
+            best_score = score
+    return best[0]
+
+
 def _resolve_relationships(
     parsed_files: list[ParsedFile],
-    name_to_entity_ids: dict[str, list[int]],
+    name_to_entries: dict[str, list[tuple[int, str]]],
+    entity_key_to_id: dict[tuple[str, str], int],
+    file_imports: dict[str, set[str]],
     stats: GraphStats,
     batch_edge,
 ) -> None:
     for pf in parsed_files:
-        _resolve_entity_relationships(pf.entities, name_to_entity_ids, stats, batch_edge)
+        _resolve_entity_relationships(pf.entities, pf.path, name_to_entries, entity_key_to_id, file_imports, stats, batch_edge)
 
 
 def _resolve_entity_relationships(
     entities: list[ParsedEntity],
-    name_to_entity_ids: dict[str, list[int]],
+    source_file: str,
+    name_to_entries: dict[str, list[tuple[int, str]]],
+    entity_key_to_id: dict[tuple[str, str], int],
+    file_imports: dict[str, set[str]],
     stats: GraphStats,
     batch_edge,
 ) -> None:
     for entity in entities:
+        src_id = entity_key_to_id.get((entity.name, source_file))
+        if src_id is None:
+            # fallback: any entry for that name
+            entries = name_to_entries.get(entity.name, [])
+            if entries:
+                src_id = entries[0][0]
+            else:
+                src_id = None
         for rel in entity.relationships:
-            targets = name_to_entity_ids.get(rel.target_name, [])
-            if not targets:
+            candidates = name_to_entries.get(rel.target_name, [])
+            if not candidates:
                 continue
-            src_ids = name_to_entity_ids.get(entity.name, [])
-            tgt_id = targets[0]
-            if src_ids and src_ids[0] != tgt_id:
-                batch_edge(src_ids[0], tgt_id, rel.relationship_type)
+            tgt_id = _pick_best_candidate(candidates, source_file, file_imports.get(source_file, set()))
+            if src_id is not None and tgt_id is not None and src_id != tgt_id:
+                batch_edge(src_id, tgt_id, rel.relationship_type)
                 stats["edges"] += 1
         for child in entity.children:
             _resolve_entity_relationships(
-                [child], name_to_entity_ids, stats, batch_edge,
+                [child], source_file, name_to_entries, entity_key_to_id, file_imports, stats, batch_edge,
             )
 
 
