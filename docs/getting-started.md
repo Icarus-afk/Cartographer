@@ -1,207 +1,145 @@
-# Getting Started with Cartographer
+# Getting Started
 
-Cartographer turns any repository into a navigable knowledge graph. This guide walks through installation, your first index, and the most common workflows — with explanations of what's happening at each step.
+You can be productive in 2 minutes — one command indexes, the next answers.
 
----
-
-## Prerequisites
-
-- **Python 3.10 or later** — Cartographer uses modern Python features
-- **pip** — Python package installer
-- **Git** — only needed if you want git intelligence features
-
----
-
-## Installation
-
-### From source (recommended for now)
+## Install
 
 ```bash
 git clone https://github.com/Icarus-afk/Cartographer.git
 cd Cartographer
-pip install -e .
+pip install -e .              # core
+pip install -e ".[watch]"     # adds watchdog for `cartographer watch`
+pip install -e ".[dev,watch]" # adds ruff + pytest
+cartographer version          # cartographer 0.1.0
 ```
 
-The `-e` flag installs in "editable" mode, so changes you make to the source code are reflected immediately.
+Requirements: `Python 3.10+`, `click`, `tree-sitter`, `fastembed`, `pathspec`, `mcp`, `numpy`, `tqdm`. Optional `watchdog`.
 
-Verify it works:
-```bash
-cartographer version
-```
-
-### What gets installed
-
-Cartographer installs these key dependencies automatically:
-
-| Dependency | What it's used for |
-|---|---|
-| **click** | Building the command-line interface |
-| **tree-sitter** | Parsing source code into syntax trees — supports 20 languages |
-| **fastembed** | Generating vector embeddings from code for semantic search |
-| **pathspec** | Reading `.gitignore` files so Cartographer skips what Git ignores |
-| **pyyaml** | Reading YAML configuration files |
-| **packaging** | Detecting package versions |
-
-Tree-sitter language grammars (one per language) are downloaded automatically the first time you index a file written in that language. The embedding model (default `BAAI/bge-small-en-v1.5`, ~33MB) downloads the first time you run `cartographer embed`. The model and batch size are configurable via environment variables.
-
----
-
-## Your First Index
-
-### 1. Choose a repository
-
-Pick any code project on your machine. If you don't have one handy, index Cartographer itself:
+## Index your first repo
 
 ```bash
-cartographer index /path/to/your/project
+cartographer index /path/to/repo
+# or inside the repo:
+cartographer index .
+# JSON for agents:
+cartographer --json index .
 ```
 
-### 2. Watch the output
-
-You'll see something like this:
+Output:
 
 ```
 Indexed 152 files in 24 directories
-Duration: 2431.18ms
-Languages: python: 89, javascript: 43, typescript: 20
-Frameworks: Django (98% confidence)
-Package Managers: pip
-Build Systems: setuptools
-Entities: 152 files parsed, 45 classes, 312 functions, 89 methods
-References: 234 cross-file imports
+Duration: 2431ms
+Languages: python: 89, typescript: 20
+Frameworks: Django (98%)
+Entities: 152 files parsed, 52 classes, 371 functions, 331 methods
+References: 199 cross-file imports
 ```
 
-Let's break down what each line means:
+By default DB is `~/.cartographer/index.db`. Override with `--db` or `$CARTOGRAPHER_DB` or per-project `.cartographer/config.json`.
 
-- **Files/Directories** — how many source files were discovered and indexed
-- **Duration** — how long it took (for most projects, under a few seconds)
-- **Languages** — which programming languages were found and how many files of each
-- **Frameworks** — web frameworks detected automatically (Django, Flask, Spring, etc.)
-- **Package Managers** — npm, pip, cargo, bundler, etc.
-- **Build Systems** — Makefile, CMake, setuptools, etc.
-- **Entities** — how many classes, functions, and methods were parsed out of the code
-- **References** — cross-file imports that were resolved
-
-### 3. The database
-
-By default, Cartographer stores everything in `~/.cartographer/index.db`. This is a SQLite database file that contains:
-- **Nodes** — every entity (files, classes, functions, variables, etc.)
-- **Edges** — relationships between entities (contains, defines, imports, etc.)
-- **Embeddings** — vector representations for semantic search
-- **Repositories** — metadata about what's been indexed
-- **Commits/Authors** — git history data (if you run `git index`)
-
-You can override the database path on every command:
+Check health:
 
 ```bash
-cartographer --db /tmp/my-project.db index /path/to/your/project
+cartographer status
+cartographer --json status    # {"status":"ok","counts":{"nodes":1890,"edges":3283},...}
+cartographer doctor           # alias for status
 ```
 
-Or set an environment variable:
+## Search
 
 ```bash
-export CARTOGRAPHER_DB=/tmp/my-project.db
-cartographer index /path/to/your/project
-```
+# keyword search (exact symbol)
+cartographer ask "UserService" --limit 5
+cartographer ask "UserService" -t class
+cartographer --json ask "UserService" --limit 5
 
-### 4. What gets indexed (and what doesn't)
-
-Cartographer automatically skips:
-- Binary files (`.pyc`, `.so`, `.png`, `.pdf`, `.zip`, etc.) — detected by file extension AND by checking for null bytes
-- Hidden directories starting with `.` (like `.git`, `.venv`, `.next`)
-- 23+ well-known ignored directories (`node_modules`, `__pycache__`, `target`, `build`, `dist`, etc.)
-- Files matching patterns in `.cartographerignore` (if present in the repo root)
-- Files matching patterns in the root `.gitignore` (parsed via the `pathspec` library)
-
-This means you can safely index large projects without worrying about vendored dependencies or generated code.
-
----
-
-## Next Steps After Indexing
-
-### Search for specific symbols
-
-```bash
-cartographer ask "UserService"
-```
-
-This searches all node names using SQL `LIKE`. Results are sorted by relevance: exact match first, then prefix match, then substring match.
-
-### Ask questions in natural language
-
-```bash
-cartographer query "what is the architecture"
-```
-
-The `query` command automatically figures out what you're asking and runs the right analysis. It can detect 9 different intent types (architecture, explain, impact, path, summarize, git blame, git why, git cochange, plain search).
-
-### See what depends on something
-
-```bash
-cartographer impact config.py
-```
-
-This answers the question "what would break if I changed this file?" by tracing all import/reference edges backwards from the target.
-
-### Get a compressed file summary
-
-```bash
-cartographer file-summary auth_service.py
-```
-
-Returns a ~200-token summary of the file: entities, imports, dependents, and relationships. **90% cheaper than reading the full file** — ideal for AI coding agents.
-
-### Explore connections
-
-```bash
-cartographer neighbors UserService --depth 2
-cartographer path "controller" "repository"
-```
-
-### Generate semantic embeddings
-
-```bash
+# semantic (needs embed first)
 cartographer embed
-cartographer similar "database connection pool"
+cartographer ask --semantic "classes that handle user authentication"
+cartographer --json ask --semantic "auth middleware" --limit 10
 ```
 
-Embedding converts each code entity into a 384-dimensional vector that captures its meaning. The similarity search then finds nodes that are conceptually related, even if they don't share keywords.
-
-### Index git history
+## Ask natural language
 
 ```bash
-cd /path/to/repo && cartographer git index
-cartographer git blame config.py
-cartographer git why UserService
-cartographer git cochange settings.py
-cartographer git authors
+cartographer query "what is the architecture?" 
+cartographer query "explain Preprocessor"
+cartographer query "who wrote auth module"
+cartographer --json query "what depends on UserService"
 ```
 
-### Start the MCP server for AI assistants
+`query` auto-detects intent: `architecture | summarize | explain | impact | path | git_blame/git_why/git_cochange | search`.
+
+## Traverse
 
 ```bash
-cartographer mcp
+cartographer impact src/auth/service.py
+cartographer neighbors UserService --depth 2
+cartographer path UserController Database
+cartographer summarize
+cartographer file-summary src/auth/service.py   # ~200 tokens vs 2000
+cartographer context --top-n 20                  # summary + arch + key nodes
 ```
 
-This starts a local server that exposes Cartographer's tools to AI coding assistants like Claude Desktop, Cursor, or OpenCode. Configure your assistant to connect to it (see the [OpenCode Integration](opencode.md) doc for details).
+All support `--json` and `--max-tokens` to fit LLM windows.
 
----
+## Architecture
 
-## Environment Variables
+```bash
+cartographer architecture --detect          # writes layers to DB
+cartographer architecture                   # reads cached
+cartographer --json architecture --detect
+```
 
-| Variable | Default | Description |
-|---|---|---|
-| `CARTOGRAPHER_DB` | `~/.cartographer/index.db` | Path to the SQLite database |
-| `CARTOGRAPHER_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model name |
-| `CARTOGRAPHER_EMBEDDING_DIM` | `384` | Model output dimension |
-| `CARTOGRAPHER_EMBEDDING_BATCH_SIZE` | `256` | Embedding batch size |
-| `CARTOGRAPHER_EMBEDDING_PARALLELISM` | `0` | CPU threads for embedding (0 = auto) |
+Detects `controller | business | data | presentation | api | middleware | config | infrastructure | migration | testing | utility | documentation`, frameworks (`django | rails | spring_boot | flutter/dart | nestjs | express | next.js | laravel | actix_web | axum`), patterns (`MVC | layered | clean | hexagonal | repository`).
 
----
+## MCP for AI agents (one-time)
 
-## What's Next?
+`opencode.json` is already configured:
 
-- [Command Reference](commands.md) — every command with detailed options and examples
-- [Architecture Deep Dive](architecture.md) — how the system works internally
-- [OpenCode Integration](opencode.md) — using Cartographer with AI coding assistants
-- [Troubleshooting](troubleshooting.md) — common issues and solutions
+```json
+{ "mcp": { "cartographer": { "type": "local", "command": ["cartographer-mcp"], "enabled": true } } }
+```
+
+For Claude Desktop `claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "cartographer": { "command": "cartographer-mcp", "args": [] } } }
+```
+
+Start manually:
+
+```bash
+cartographer mcp start --verbose
+cartographer mcp start --port 8080   # SSE
+```
+
+Tools (20): `status, doctor, health, list_repos, ensure_indexed, search, impact, neighbors, path, summarize, architecture, similar, ask, graph_data, index, context, update_index, delete_file, db_info, file_summary` + resources `cartographer://repos`.
+
+LLM workflow:
+
+```
+status() → if empty: index(path=".")
+search(query="UserService") → file_summary(file_path="src/...") → impact(target="UserService")
+```
+
+## Watch
+
+```bash
+cartographer watch /path/to/repo   # needs watchdog, handles all 31 langs
+# or per-file:
+cartographer update-index src/main.py
+cartographer delete-file src/removed.py
+```
+
+VS Code does this automatically on save/rename/delete (batched 2s, `update_index`/`delete_file` via MCP).
+
+## Next steps
+
+- `docs/commands.md` — full CLI reference
+- `docs/mcp.md` — all 20 MCP tools with JSON shapes
+- `docs/architecture.md` — how ingestion → parsing → graph → embeddings works and where robustness lives
+- `docs/troubleshooting.md` — doctor, common errors
+
+`cartographer --help`, `cartographer status --help`, `cartographer ask --help` all show examples.

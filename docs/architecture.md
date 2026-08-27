@@ -1,665 +1,97 @@
-# Architecture Deep Dive
+# Architecture — How Cartographer Works
 
-Cartographer transforms source code repositories into queryable knowledge graphs. This document explains how each engine works and how they fit together.
-
----
-
-## System Overview
+## Pipeline
 
 ```
-Repository (files on disk)
-    │
-    ▼
-┌─────────────────┐
-│  Ingestion      │  File discovery, language detection, framework fingerprinting,
-│  Engine         │  .gitignore/.cartographerignore support, binary detection
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Parser Engine  │  20 language parsers (Tree-sitter), entity extraction
-│                 │  (classes, functions, methods, interfaces, enums, etc.)
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Graph Builder  │  SQLite persistence: nodes, edges, directories,
-│                 │  manifest metadata, embeddings, git data
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    ▼         ▼
-┌────────┐  ┌──────────┐
-│Retrieval│  │Git       │  Git log parsing, commit/author tracking,
-│Engine   │  │Intelligence│ co-change analysis, why-introduced
-│         │  │Engine    │
-│Search,  │  └──────────┘
-│Traversal│
-│Impact,  │  ┌──────────────┐
-│Path     │  │Architecture  │  Layer detection, pattern matching,
-│Summary  │  │Engine        │  dependency flow, framework detection
-└────────┘  └──────────────┘
-         │           │
-         ▼           ▼
-     ┌────────┐ ┌──────────────┐
-     │Query   │ │Compression   │  Token-aware output compression
-     │Planner │ │Engine        │  for LLM context budgets
-     │Intent  │ └──────────────┘
-     │Detect  │
-     │Dispatch│ ┌──────────────┐
-     └────────┘ │ MCP Server   │  Model Context Protocol server
-                 │              │  exposes 14 tools + 3 resources
-                └──────────────┘
-
-┌──────────────┐
-│ Embedding    │  fastembed + bge-small-en-v1.5 (384-dim)
-│ Engine       │  numpy-batched cosine similarity (280x speedup)
-└──────────────┘
+discover_files (TEXT_EXTENSIONS + LANGUAGE_EXTENSIONS, .gitignore + .cartographerignore, 10MiB skip, symlink loop guard, 0.1% binary check)
+  → detect_languages / fingerprint_frameworks / package_managers / monorepo
+  → _parse_repository (ThreadPool min(cpu,8), 30s future timeout, per-file isolation → Generic fallback, 1MiB/2MiB caps)
+    → BaseParser (Parser(Language), b"\x00" check, has_error, count_error_nodes, errors=replace, 1MiB/2MiB truncate warnings)
+  → extract_references (FILE_EXTENSIONS per lang, IMPORT_PATTERNS regex, suffix-index, MODULE_INDICATORS)
+  → extract_schema (Django/JPA/Prisma/SQL, CREATE TABLE parsing)
+  → build_graph (reclassify Controller/Service/Middleware/Repository, chunked 1000, SQLITE_BUSY retry 3×, WAL)
+  → embeddings (bge-small-en-v1.5, 384d, chunked 500, batch 256, 3× model retry, valid-blob filter, hybrid keyword boost)
+  → storage (SQLite WAL, busy_timeout 5s, indices repo/type/file_path/name)
 ```
 
----
-
-## 1. Ingestion Engine
-
-**File:** `cartographer/ingestion/engine.py`
-
-The ingestion engine orchestrates the entire indexing pipeline from file discovery to graph construction.
-
-### File Discovery
-
-Recursively walks the directory tree using `Path.iterdir()`. Skips:
-- **Hidden directories** starting with `.` (`.git`, `.venv`, `.next`, `.nuxt`, etc.)
-- **23 blocked directories** (`node_modules`, `__pycache__`, `target`, `build`, `dist`, `vendor`, `Pods`, etc.)
-- **Binary files** — two-layer detection: extension blocklist (50+ binary extensions) then null-byte check (reads first 8KB and checks for `\0`)
-- **`.cartographerignore` patterns** — loaded from repo root, matched via `fnmatch.fnmatch`. Patterns with `/` match full relative path; patterns without `/` match basename only
-- **`.gitignore` patterns** — root `.gitignore` is parsed via the `pathspec` library (gitwildmatch format) and merged with `.cartographerignore` exclusions
-
-### Language Detection
-
-Maps file extensions to languages:
-
-| Extension | Language |
-|---|---|
-| `.py` | Python |
-| `.js`, `.jsx`, `.mjs`, `.cjs` | JavaScript |
-| `.ts` | TypeScript |
-| `.tsx` | TSX |
-| `.go` | Go |
-| `.rs` | Rust |
-| `.java` | Java |
-| `.kt`, `.kts` | Kotlin |
-| `.cs` | C# |
-| `.php`, `.phtml` | PHP |
-| `.rb` | Ruby |
-| `.c`, `.h` | C |
-| `.cpp`, `.hpp`, `.cc`, `.cxx` | C++ |
-| `.swift` | Swift |
-| `.scala`, `.sc` | Scala |
-| `.ex`, `.exs` | Elixir |
-| `.lua` | Lua |
-| `.jl` | Julia |
-| `.zig` | Zig |
-| `.groovy`, `.gvy`, `.gsh` | Groovy |
-
-### Framework Fingerprinting
-
-**File:** `cartographer/ingestion/fingerprint.py`
-
-Detects frameworks by checking for indicator files and parsing config files:
-
-| Framework | Detection Method |
-|---|---|
-| Django | `manage.py`, `settings.py`, `django` in `requirements.txt` |
-| Flask | `flask` in `requirements.txt` |
-| FastAPI | `fastapi` in `requirements.txt` or imports |
-| Rails | `Gemfile`, `bin/rails` |
-| Spring Boot | `pom.xml`, `build.gradle`, `application.yml` |
-| Express | `express` in `package.json` dependencies |
-| Next.js | `next` in `package.json`, `next.config.js` |
-| NestJS | `nest` in `package.json`, `nest-cli.json` |
-| React | `react` in `package.json` |
-| Vue | `vue` in `package.json` |
-| Laravel | `artisan` file, `composer.json` |
-| Actix Web | `actix-web` in `Cargo.toml` |
-| Axum | `axum` in `Cargo.toml` |
-| Gin | `gin` in `go.mod` |
-| Echo | `echo` in `go.mod` |
-| Rocket | `rocket` in `Cargo.toml` |
-| Vapor | `vapor` in `Package.swift` |
-| Phoenix | `phoenix` in `mix.exs` |
-
-Each fingerprint includes a confidence score (0.0–1.0). Fingerprints are stored as JSON in the `manifest_json` column of the `repositories` table.
-
-### Package Manager Detection
-
-Detects files like `package.json` (npm), `Cargo.toml` (cargo), `requirements.txt` (pip), `Gemfile` (bundler), `Pipfile` (pipenv), `Cargo.lock`, `yarn.lock`, `composer.json` (composer).
-
-### Build System Detection
-
-Detects `Makefile`, `CMakeLists.txt`, `Cargo.toml`, `setup.py`, `pyproject.toml`, `build.gradle`, `pom.xml`.
-
-### Monorepo Detection
-
-Detects `lerna.json`, `nx.json`, `turbo.json`, `workspace` entries in `package.json` or `Cargo.toml` (pnpm, npm, yarn workspaces).
-
----
-
-## 2. Parser Engine
-
-**File:** `cartographer/parser/registry.py`, `cartographer/parser/base.py`, `cartographer/parser/languages/*.py`
-
-### Architecture
-
-The parser engine uses a registry pattern — each language has its own parser class that extends `BaseParser` and implements `parse(file_path, source_bytes)` returning a list of `ParsedEntity` trees. All 20 tree-sitter language bindings are imported lazily on first use via `_ensure_parsers()`, and parser instances are cached in `_PARSER_CACHE` (constructed once per language).
-
-```
-BaseParser (abstract)
- ├── PythonParser
- ├── JavaScriptParser (+ value-aware extraction, export handling)
- │    ├── TypeScriptParser (+ interfaces, type aliases, enums, generics)
- │    │    └── TSXParser (+ JSX element extraction)
- ├── GoParser
- ├── RustParser
- ├── ...
- └── GroovyParser (20 total)
-```
-
-### Entity Types
-
-| EntityKind | Description | Examples |
-|---|---|---|
-| `FILE` | Source file | `main.py`, `app.js` |
-| `CLASS` | Class definition | `UserService`, `ConfigManager` |
-| `FUNCTION` | Function definition | `get_user()`, `validate_input` |
-| `METHOD` | Method within a class | `__init__`, `save()` |
-| `INTERFACE` | Interface/protocol/trait | `IUserRepository`, `Serializable` |
-| `TYPE_ALIAS` | Type alias | `Response<T>`, `UserID` |
-| `ENUM` | Enumeration | `Color.RED`, `Status.ACTIVE` |
-| `VARIABLE` | Module-level variable | `DEFAULT_TIMEOUT`, `APP_CONFIG` |
-| `CONSTANT` | Named constant | `MAX_RETRIES`, `PI` |
-| `MODULE` | Module/namespace | Python module, Rust `mod` |
-
-### JavaScript Parser (`javascript.py`)
-
-Dispatches top-level children to specialized extractors:
-
-| Node Type | Extracted As | Notes |
-|---|---|---|
-| `function_declaration` | FUNCTION | Standard function |
-| `function_expression` | FUNCTION | Anonymous/assigned |
-| `arrow_function` | FUNCTION | Named `<anonymous>` if unnamed |
-| `class_declaration` | CLASS | With children |
-| `variable_declaration` (var) | CONSTANT | Module-level var |
-| `lexical_declaration` (const/let) | CONSTANT or FUNCTION | **Value-aware**: promotes to FUNCTION if value is arrow/function |
-| `export_statement` | delegates | Wraps inner declaration |
-
-**Value-aware extraction:** If a `variable_declarator`'s value is an arrow function or class, the entity kind is promoted — so `const handler = () => {}` becomes a FUNCTION, not a CONSTANT.
-
-**Export handling:** `export default function()` without a name falls back to name `"default"`.
-
-### TypeScript Parser (`typescript.py`)
-
-Extends JavaScriptParser with TypeScript-specific nodes:
-
-| Node Type | Extracted As | Metadata |
-|---|---|---|
-| `interface_declaration` | INTERFACE | `{"type_parameters": "<T>"}` |
-| `type_alias_declaration` | TYPE_ALIAS | `{"type_parameters": "<T>"}` |
-| `enum_declaration` | ENUM | — |
-
-Generic type parameters (`<T>`, `<K, V>`) are captured in metadata for interfaces and type aliases.
-
-### TSX Parser (`tsx.py`)
-
-Extends TypeScriptParser with JSX handling. Captures top-level JSX expressions:
-
-| Node Type | Extracted As | Example |
-|---|---|---|
-| `expression_statement` → `jsx_element` | CONSTANT (tag name) | `<App />` at module root |
-| `expression_statement` → `jsx_self_closing_element` | CONSTANT (tag name) | `<Header />` at module root |
-
-### All 20 Parsers
-
-| Parser | File | Tree-sitter Grammar |
-|---|---|---|
-| PythonParser | `languages/python.py` | `tree-sitter-python` |
-| JavaScriptParser | `languages/javascript.py` | `tree-sitter-javascript` |
-| TypeScriptParser | `languages/typescript.py` | `tree-sitter-typescript` (language_typescript) |
-| TSXParser | `languages/tsx.py` | `tree-sitter-typescript` (language_tsx) |
-| GoParser | `languages/go.py` | `tree-sitter-go` |
-| RustParser | `languages/rust.py` | `tree-sitter-rust` |
-| JavaParser | `languages/java.py` | `tree-sitter-java` |
-| KotlinParser | `languages/kotlin.py` | `tree-sitter-kotlin` |
-| CSharpParser | `languages/csharp.py` | `tree-sitter-c-sharp` |
-| PHPPhpParser | `languages/php.py` | `tree-sitter-php` |
-| RubyParser | `languages/ruby.py` | `tree-sitter-ruby` |
-| CParser | `languages/c.py` | `tree-sitter-c` |
-| CppParser | `languages/cpp.py` | `tree-sitter-cpp` |
-| SwiftParser | `languages/swift.py` | `tree-sitter-swift` |
-| ScalaParser | `languages/scala.py` | `tree-sitter-scala` |
-| ElixirParser | `languages/elixir.py` | `tree-sitter-elixir` |
-| LuaParser | `languages/lua.py` | `tree-sitter-lua` |
-| JuliaParser | `languages/julia.py` | `tree-sitter-julia` |
-| ZigParser | `languages/zig.py` | `tree-sitter-zig` |
-| GroovyParser | `languages/groovy.py` | `tree-sitter-groovy` |
-
-### Relationship Extraction
-
-Each parser extracts these relationship types from the AST:
-
-| Relationship | Description | Extracted By |
-|---|---|---|
-| `CALLS` | Function/method calls | All 20 parsers (via `_extract_calls`) |
-| `INHERITS` | Class/struct inheritance | Python, JS, TS, Java, C#, Kotlin, Swift, Scala, Rust, Ruby, PHP, Groovy |
-| `IMPLEMENTS` | Interface/protocol implementation | Java, C#, Kotlin, Scala, Rust, Elixir, PHP, Groovy |
-| `DECORATES` | Decorator relationships | Python |
-
-### Docstring Extraction
-
-Leading comments are extracted as docstrings for these languages:
-
-| Language | Comment Style | Example |
-|---|---|---|
-| Python | Triple-quoted strings | `"""Module docstring"""` |
-| Java | Javadoc | `/** ... */` |
-| C# | XML doc | `/// ...` |
-| Go | Line comments | `// ...` |
-| Rust | Doc comments | `/// ...` or `//! ...` |
-
-### Metadata Extraction
-
-Parsers attach metadata to entities for richer analysis:
-
-| Language | Entity | Metadata |
-|---|---|---|
-| Python | Functions | `decorators`, `parameters` |
-| TypeScript | Interfaces, Functions | `type_parameters` |
-| Rust | Functions | `public`, `return_type` |
-| Java | Methods | `modifiers` (public, private, protected, static, final) |
-| Go | Functions, Methods | `exported` (uppercase = exported) |
-
-### Elixir Parser Note
-
-The Elixir Tree-sitter grammar (0.3.5) uses positional children instead of named fields for `call` nodes. The parser uses `child[0]` for the identifier, `child[1]` for arguments, and `child[2]` for the do-block.
-
----
-
-## 3. Reference Extraction
-
-**File:** `cartographer/ingestion/references.py`
-
-Extracts cross-file import/reference statements using regex patterns, then resolves them to actual file paths.
-
-### Import Patterns
-
-Each language has regex patterns for its import syntax:
-
-```python
-IMPORT_PATTERNS = {
-    Language.PYTHON: [
-        (r'^\s*import\s+(\S+)', 1),
-        (r'^\s*from\s+(\S+)\s+import', 1),
-    ],
-    Language.JAVASCRIPT: [
-        (r"(?:import|require)\s*\(?['\"]([^'\"]+)['\"]", 1),
-        (r"from\s+['\"]([^'\"]+)['\"]", 1),
-    ],
-    Language.RUST: [
-        (r'^\s*use\s+(\S[^;]*)', 1),
-        (r'^\s*extern\s+crate\s+(\S+)', 1),
-    ],
-    # ... 20 languages
-}
-```
-
-### Candidate Resolution
+## Storage
 
-The `_candidates_for_import` function resolves import strings to actual file paths using a multi-step fallback chain:
+`storage/connection.py` — `get_connection(path, timeout=10.0, check_same_thread=False)` + `WAL/NORMAL/-8000/MEMORY/5000`. `init_schema` creates:
 
-1. **Exact match** — import string matches file path exactly
-2. **Suffix match** — file path ends with import string (converting dots to path separators, e.g., `os.path` → `os/path`)
-3. **Case-insensitive suffix** — lowercase version of suffix match
-4. **Last-part fallback** — for multi-segment imports, tries just the last segment
-5. **Module indicator fallback** — checks for `__init__.py`, `mod.rs`, `index.ts`
+- `repositories(id,path UNIQUE,name,manifest_json)`
+- `nodes(id,repo,node_type,name,file_path,metadata_json)` — `type ∈ {directory,file,class,function,method,interface,enum,constant,variable,api_endpoint,controller,service,repository_layer,middleware,job,worker,queue,table,markdown,adr,diagram,wiki,commit}`
+- `edges(id,repo,src,tgt,edge_type)` — `CONTAINS|DEFINES|DECLARES|CALLS|INHERITS|IMPLEMENTS|DECORATES|IMPORTS`
+- `embeddings(id,node,model,vector BLOB)` — `UNIQUE(node,model)`
+- `commits/commit_files/commit_authors/architecture`
 
-### Rust-Specific Resolution
+Indices: `idx_nodes_repo_type`, `idx_nodes_file_path/name`, `idx_edges_repo_type/source/target`, `idx_embeddings_node_model` (UNIQUE).
 
-Rust imports use `::` separators:
-- `crate::foo` → `src/foo.rs`
-- `super::foo` → `../foo.rs`
-- `self::foo` → `./foo.rs`
-- External crate names are stripped (e.g., `mdbook::config` → `config`)
+## Parsers (31 languages, 24 files)
 
----
+`parser/base.py` — `Parser(Language)`, `_count_error_nodes`, `_node_text(errors=replace)`, docstring `///|/**|//`.
 
-## 4. Graph Builder
+`parser/registry.py` — `_ensure_parsers` does `_try_import` per language (missing grammar → `GenericParser` with `bytes→utf-8` regex), `register_parser(language, cls, [".ext"])` extends `LANGUAGE_EXTENSIONS` + `ENG_EXT`, `get_parser` thread-local cache, fallback `GenericParser` for any unknown.
 
-**File:** `cartographer/graph/builder.py`
+Languages: `python (.py)`, `javascript (.js/.jsx/.mjs/.cjs)`, `typescript (.ts)`, `tsx`, `go (.go)`, `rust (.rs)`, `java (.java)`, `kotlin (.kt/.kts)`, `csharp (.cs)`, `php (.php/.phtml)`, `ruby (.rb)`, `c (.c/.h)`, `cpp (.cpp/.hpp/.cc/.cxx)`, `swift (.swift)`, `scala (.scala/.sc)`, `elixir (.ex/.exs)`, `lua (.lua)`, `julia (.jl)`, `zig (.zig)`, `groovy (.groovy/.gvy/.gsh)`, `dart (.dart)` (regex + `tree_sitter_dart` if present), `markdown (.md/.markdown/.mdx)` (headings→`markdown`/`adr`, `mermaid`→`diagram`), `yaml/json/toml/sql/html/css/shell/dockerfile/protobuf` via `GenericParser` (class/func + import regex, `empty→[]`).
 
-### Schema
+`EMBEDDABLE_TYPES = {class,function,method,file,interface,enum,type_alias}` — others indexed not embedded.
 
-The graph is stored in SQLite with these tables:
+## Graph Builder (`graph/builder.py`)
 
-```sql
-repositories (id, path, name, indexed_at, manifest_json)
-nodes        (id, repository_id, node_type, name, file_path, metadata_json)
-edges        (id, repository_id, source_node_id, target_node_id, edge_type, metadata_json)
-embeddings   (id, node_id, model, vector)
-architecture (id, repository_id, layer, pattern, description)
-commits      (id, repository_id, hash, author, message, committed_at)
-commit_files (id, commit_id, file_path, change_type)
-commit_authors (id, repository_id, name, email, commit_count)
-```
+`build_graph` — `reclassify` `*Controller→controller` etc., `DELETE embeddings/architecture/edges/nodes` per repo, `base_id = MAX(id)+1`, `dir_cache`/`file_cache`, `_batch_node/_batch_edge` with `name_to_entity_ids`, `_process_entity` (`MODULE→skip`, `DEFINES/DECLARES/CONTAINS`), `references` → `IMPORTS`, `_resolve_relationships` (`CALLS/INHERITS/IMPLEMENTS` via `name_to_entity_ids`). Chunked `1000`, commit retry `0.2*(attempt+1)`, `invalidate_cache`.
 
-### Indexes
+`update_file_in_graph`/`delete_file_from_graph` — incremental, `_ensure_dir_path_nodes`.
 
-```sql
-CREATE INDEX idx_nodes_repo_type ON nodes(repository_id, node_type);
-CREATE INDEX idx_nodes_file_path ON nodes(file_path);
-CREATE INDEX idx_edges_repo_type ON edges(repository_id, edge_type);
-CREATE INDEX idx_edges_source ON edges(source_node_id);
-CREATE INDEX idx_edges_target ON edges(target_node_id);
-CREATE INDEX idx_nodes_name ON nodes(name);
-CREATE INDEX idx_commits_hash ON commits(repository_id, hash);
-CREATE INDEX idx_commit_files_commit ON commit_files(commit_id);
-```
-
-### Edge Types
-
-| Edge Type | Description |
-|---|---|
-| `CONTAINS` | Directory/file/entity containment |
-| `DEFINES` | Class/function/interface definition |
-| `DECLARES` | Variable/constant declaration |
-| `IMPORTS` | Cross-file import/reference |
+## Embeddings (`embedding/engine.py`)
 
-### Graph Construction Process
+`EMBEDDING_MODEL bge-small-en-v1.5` / `384` / `256` / `0`. `_get_model` 3× retry + backoff `2^attempt`. `_build_node_text` includes `node_type:name`, `file`, `directory`, `docstring` (500), `signature`, `parameters` (10), `returns`, `decorators` (200), `bases` (5), `parent/module`, `language`.
 
-The builder processes each parsed file:
-1. Creates directory nodes for each path segment
-2. Creates CONTAINS edges from parent to child
-3. Creates file nodes with language metadata
-4. Processes entities recursively with DEFINES/DECLARES edges
-5. Creates IMPORTS edges from reference resolution
-6. Deduplicates entities to prevent duplicate nodes
+`generate_embeddings` — `WHERE node_type IN EMBEDDABLE AND e.id IS NULL`, count skip, chunked texts `500`, `model.embed(batch 256)` with per-chunk `try/except` + incremental `executemany` + `commit`, `total_embedded, skip_count`.
 
----
+`_load_vectors` — filter `len(blob)==384*4`, `>100k` warning, `frombuffer(b"".join(blobs)).reshape`, per-row fallback, `nan_to_num`, `norm==0 →1`, cache `10` entries LRU, `exclude_id` mask.
 
-## 5. Retrieval Engine
+`similarity_search` — `_encode_query` cached `128`, `query_norm==0→[]`, `hybrid` boost `+0.1*overlap` when `top<0.35` (name/file words), filter `<0.15` but keep 3, `argpartition` top. `find_similar` similar.
 
-**File:** `cartographer/retrieval/`
+## Ingestion (`ingestion/engine.py`, `discoverer.py`)
 
-### Search (`searcher.py`)
+`discover_files` — `_load_ignore_patterns(.cartographerignore)` + `_load_gitignore_spec` (pathspec `gitwildmatch`), `_walk` sorted, `IGNORED_DIRS` (`node_modules/.git/__pycache__`…), `BINARY_EXTENSIONS` check `b"\x00"`, `MAX_DISCOVER_FILE_BYTES 10MiB`.
 
-Basic text search using SQL `LIKE` with `%query%` wildcards. Results ordered by exact match → prefix match → substring match.
+`index_repository` — `lang_counts/package_managers/build_systems/monorepo/frameworks`, dirs set, `manifest RepositoryManifest`, `_parse_repository`, `extract_references`/`extract_schema` (each `try`), `build_graph`, `fatal Filter: not (startswith Parse/Failed to parse/large/truncated)`.
 
-Supports optional filters by `node_type` and `repo_name`.
+`_parse_single_file` — `10MiB` skip → `Parse skipped`, `2MiB` truncate log, `_detect_lang_for_file` (Dockerfile/makefile), `get_parser` → `Generic` fallback, `parse_file` + `extract_entities` with inner `try` → generic on crash, ultimate isolation.
 
-### Traversal (`traversal.py`)
+`_parse_repository` — `supported_languages` → `ext_map`, `ThreadPool min(cpu,8)`, `as_completed` `done%10`, `future.result(timeout=30)` → `Parse timeout` + `cancel`, `future failed` per-file, `sort` by path, `update_index` reuses same `Generic` fallback + `generate_embeddings` for changed nodes.
 
-**Neighbors** — BFS traversal from a starting node, collecting all connected nodes up to a configurable depth. Uses `SELECT source_node_id, target_node_id FROM edges WHERE source_node_id = ? OR target_node_id = ?`.
+## Retrieval
 
-**Impact Analysis** — Reverse graph traversal finding all nodes that point to the target via IMPORTS, DEFINES, or CONTAINS edges. Groups results by edge type.
+`searcher.py` — `_TYPE_PRIORITY` (`api_endpoint 1.2 > controller 1.1 > class/interface/service 1.0 > function/method 0.9 > file 0.7`), `_name_score` (`==1.0/startswith0.8/contains0.5/multi-word0.3+`), `_compute_score` (`0.5*name+0.2*type+0.2*log(ref)+0.1/depth`), `_search` `name LIKE %q%` + `r.name = ?` exact first, `LIKE q%` second, clamped `limit 1-100`, empty `→[]`, escaped. `_fetch_ref_counts` `LEFT JOIN edges target`.
 
-**Path Finding** — Bidirectional BFS from start to target node with a max depth limit. Alternates between forward and backward search frontiers. Returns the shortest path.
+`traversal.py` — `_traverse` DFS `visited`, `get_neighbors`, `impact_analysis` transitive `target_id` BFS batch, `_resolve_target` `isdigit→id` else `name=file_path exact else LIKE`, `find_path` BFS `max_depth`, `_build_path_result`.
 
-### Summarizer (`summarizer.py`)
+`summarizer.py` — `generate_summary` picks `CWD/path` exact else largest `COUNT(nodes)`, `node_breakdown` / `edge_breakdown`, `top_files`, `top_classes` (`method count`).
 
-Aggregates statistics from the graph:
-- Total nodes and edges
-- Node type breakdown
-- Edge type breakdown
-- Top files by entity count
-- Top classes by method count
+## Architecture (`architecture/engine.py`)
 
----
+`_tokenize` `([a-z0-9])([A-Z])→_`, split `_[.]` lower. `_score_name` `suffix 1.0 / prefix 0.8 / token 0.75 / contains 0.5`. `_score_file_name` `boundary_keywords {api,spec,test,env,lib,ui}` token check else `in stem`. `_score_directory` `== or token 1.0 / contains 0.6`.
 
-## 6. Architecture Engine
+`FRAMEWORK_FILE_RULES` for `django/flask/rails/express/fastapi/next.js/laravel/actix_web/axum/flutter/dart`. `LAYER_META` + `documentation`.
 
-**File:** `cartographer/architecture/engine.py`
+`_collect_evidence` — `class/interface/enum/controller/service/...` naming, `I/T` prefix, `function`, `file`, `framework_file`, `directory`, `django_app/rails`, `docs` (`*.md→documentation 0.7`, `adr 0.9`), `markdown_node`, `flutter`, `infra yaml/dockerfile`, `proto→api`.
 
-### Detection Pipeline
+`_aggregate_layers` — `avg*0.35+max*0.5+diversity*0.05` × `min(count/3,1)` with `single-entity single-kind & max<1.0 → *0.75` and `len==1 & max<0.9 → *0.7`, filter `<0.2`.
 
-1. **Framework detection** — reads `manifest_json` from the database (fingerprint data from indexing). Falls back to graph-only detection for old databases.
+`_analyze_dependency_flow` via `IMPORTS` edges + `entity_map`.
 
-2. **Evidence collection** — scores all nodes against 5 signal types:
-   - Class naming (1.0x weight) — suffix/prefix matching against 50 rules
-   - Function naming (0.8x weight) — same rules
-   - File naming (1.0x weight) — keyword matching against 32 rules
-   - Directory naming (1.0x weight) — exact match against 60 rules
-   - Framework files (1.0x weight) — 70+ framework-specific patterns
+## Query (`query/engine.py`)
 
-3. **Layer aggregation** — combines evidence into confidence scores per layer:
-   ```
-   confidence = (avg_weight × 0.4 + max_weight × 0.6) × min(entity_count / 3, 1.0)
-   ```
+`INTENT_RULES` 9 intents with priority regex, `_extract_targets`, `classify_intent` → `search fallback`.
 
-4. **Dependency flow** — analyzes IMPORTS edges between files in different layers. Detects expected vs. unexpected dependency directions.
+Builders `_search_step/_summarize_step/_explain_step/_impact_step/_path_step/_architecture_step/_build_git_*` → `PLAN_BUILDERS`; `execute_query` → `builder` + `max_tokens` trunc (`estimate_tokens`).
 
-5. **Pattern detection** — matches detected layer sets against 6 architecture patterns and 9 framework-specific patterns.
+## Compression (`compression/engine.py`)
 
-### Layer Types
+4 strategies, `estimate_tokens` (`chars/4`), `compress` by `max_tokens`.
 
-| Layer | Detection Signals |
-|---|---|
-| Controller | `*Controller`, `routes/`, `handlers/` |
-| Presentation | `views/`, `templates/`, `components/` |
-| API | `api/`, `graphql/`, `grpc/` |
-| Business | `*Service`, `*Manager`, `services/` |
-| Data | `*Repository`, `*DAO`, `models/` |
-| Middleware | `middleware/`, `filters/` |
-| Config | `*Config`, `config/`, `settings/` |
-| Infrastructure | `infrastructure/`, `*Adapter`, `*Client` |
-| Migration | `migrations/`, `alembic/` |
-| Testing | `tests/`, `*Test`, `*Spec` |
-| Utility | `utils/`, `helpers/`, `common/` |
-| Deployment | `Dockerfile`, CI/CD configs |
+## Robustness Summary
 
-### Architecture Patterns
-
-| Pattern | Required Layers |
-|---|---|
-| MVC | controller, presentation, data |
-| Layered (n-tier) | presentation, business, data |
-| Clean Architecture | business, infrastructure, api |
-| Hexagonal (Ports & Adapters) | business, infrastructure, api |
-| Repository Pattern | data |
-| Service-Oriented | api, business |
-
----
-
-## 7. Embedding Engine
-
-**File:** `cartographer/embedding/engine.py`
-
-### Model
-
-- **Model:** `BAAI/bge-small-en-v1.5` (general-purpose embedding model)
-- **Dimensions:** 384
-- **Library:** `fastembed` (efficient ONNX-based inference)
-- **Singleton:** model cached globally (loaded once, reused across commands)
-
-### Embeddable Node Types
-
-```
-class, function, method, file, interface, enum, type_alias
-```
-
-All 7 types include `type_alias` (TypeScript type aliases, etc.).
-
-### Text Construction
-
-Each node is converted to text before embedding:
-```
-{node_type}: {name}
-file: {file_path}
-docstring: {docstring if present}
-```
-
-### Pipeline (`generate_embeddings`)
-
-1. Queries for unembedded nodes (uses `NOT IN (SELECT node_id FROM embeddings)`)
-2. Builds text representations (with progress bar)
-3. Batch-embeds via `model.embed(texts)` (with progress bar)
-4. Serializes vectors as float32 blobs (384 × 4 = 1536 bytes each)
-5. Batch-inserts into embeddings table (with progress bar)
-6. Skips already-embedded nodes (incremental — safe to rerun)
-
-### Similarity Search (`similarity_search`)
-
-Uses **numpy-batched cosine similarity**:
-
-```python
-vectors = np.frombuffer(all_blobs, dtype=np.float32).reshape(N, 384)
-norms = np.linalg.norm(vectors, axis=1)
-dot = vectors @ query_vec
-scores = dot / (norms * np.linalg.norm(query_vec))
-top_indices = np.argpartition(-scores, top_k)[:top_k]
-```
-
-This is **280x faster** than the original Python loop:
-- 5,000 vectors: **7ms** vs 2,025ms
-
-### Find Similar (`find_similar`)
-
-Same batch approach but uses an existing node's embedding vector as the query. Excludes the source node from results.
-
----
-
-## 8. Git Intelligence Engine
-
-**File:** `cartographer/git/engine.py`
-
-### Commit Indexing
-
-Runs `git log --all --reverse --format=FORMAT --date=unix` with a 60-second timeout. Parses output to extract commits, authors, and file changes.
-
-### Co-Change Analysis
-
-Counts how often pairs of files appear in the same commit. Co-change frequency = number of commits where both files changed together. Returns sorted results.
-
-### Why-Introduced
-
-Uses `git log --diff-filter=A --follow --format=%H` to find the commit that first introduced a file or symbol.
-
----
-
-## 9. Compression Engine
-
-**File:** `cartographer/compression/engine.py`
-
-### Token Estimation
-
-```
-estimate_tokens(text) → len(text) // 4
-```
-
-### Strategies
-
-| Strategy | Input | Method |
-|---|---|---|
-| `compress_nodes` | List of node dicts | Groups by type when >10, shows counts + top files, truncates lines |
-| `compress_impact` | Impact analysis results | Groups by edge type, shows counts per group |
-| `compress_path` | Path results | Shows all hops, truncates long paths |
-| `compress_summary` | Summary dict | Condenses to top types/files, truncates |
-
-### Auto-Dispatch
-
-The `compress()` function automatically selects the best strategy based on input structure.
-
----
-
-## 10. Query Planner
-
-**File:** `cartographer/query/engine.py`
-
-Uses priority-based regex rules to classify queries into 9 intents:
-
-| Intent | Priority Keywords | Retrieval Method |
-|---|---|---|
-| `architecture` | architecture, layers, structure, pattern | `detect_architecture` |
-| `summarize` | overview, summarize, high-level | `generate_summary` |
-| `explain` | explain, what is, describe | `search_nodes` + `impact_analysis` |
-| `impact` | impact, depends, breaks, affect | `impact_analysis` |
-| `path` | path, between, connect, relationship | `find_path` (BFS) |
-| `git_blame` | who, wrote, authored, changed | Git blame/history |
-| `git_why` | why, introduced, added | Why-introduced analysis |
-| `git_cochange` | cochange, changes with | Co-change analysis |
-| `search` | (fallback) | `search_nodes` |
-
-Architecture and summarize keywords get the highest priority (10) to avoid being misclassified as `explain` or `impact`.
-
----
-
-## 11. MCP Server
-
-**File:** `cartographer/mcp/server.py`
-
-### Protocol
-
-Uses **Model Context Protocol** (MCP SDK 1.27.2) with FastMCP on stdio transport. No HTTP, no auth — local only.
-
-### Resources (3)
-
-| URI | Description | Returns |
-|---|---|---|
-| `cartographer://repos` | List all indexed repositories | IDs, names, paths |
-| `cartographer://repo/{name}` | Repository details + counts | Nodes, edges, embeddings |
-| `cartographer://node/{node_id}` | Single node with metadata | Name, type, file, metadata JSON |
-
-### Tools (14)
-
-| Tool | Parameters | Description |
-|---|---|---|
-| `search` | query, repo?, node_type?, limit?, db? | Search graph nodes by name |
-| `impact` | target, repo?, db? | What depends on target |
-| `neighbors` | name, repo?, depth?, db? | BFS graph neighbors |
-| `path` | from_name, to_name, max_depth?, db? | Shortest path BFS |
-| `summarize` | repo?, db? | Repository statistics |
-| `architecture` | repo?, detect?, db? | Detect/retrieve architecture |
-| `similar` | target, repo?, limit?, db? | Semantic similarity |
-| `ask` | query, repo?, limit?, max_tokens?, db? | Natural language Q&A |
-| `graph_data` | repo?, limit?, offset?, dir?, expand_node_id?, db? | Export graph as JSON for visualization |
-| `file_summary` | file_path, repo?, db? | Compressed file summary (~200 tokens vs ~2000 for full file) |
-| `index` | path, db? | Index a repository |
-| `context` | repo?, top_n?, max_tokens?, db? | Generate structured context package |
-| `update_index` | file_path, db? | Incrementally re-index a single file |
-| `delete_file` | file_path, db? | Remove a deleted file from the graph |
-| `db_info` | db? | Show database statistics |
-
-All tools return plain text formatted for LLM consumption.
-
-### Graph Data Tool
-
-The `graph_data` tool powers the VS Code interactive graph visualization. It uses **deterministic hub-based sampling** to select nodes:
-
-1. Computes degree (edge count) for all nodes via a CTE with O(n+m) performance
-2. Selects top-degree "hub" nodes (1/8 of limit)
-3. Expands to immediate neighbors of those hubs
-4. Fills remaining capacity with next-highest-degree nodes
-5. Orders results by `node_id` for deterministic output (same nodes every time)
-
----
-
-## Database
-
-### Location
-
-Default: `~/.cartographer/index.db`. Configurable via `--db` flag or `CARTOGRAPHER_DB` environment variable.
-
-### Storage
-
-- SQLite with WAL (Write-Ahead Log) mode for concurrent reads
-- Foreign keys enabled for referential integrity
-- JSON metadata columns for flexible schema evolution
-- Binary vector blobs for embeddings (384 floats × 4 bytes = 1536 bytes per vector)
-
-### Performance
-
-| Operation | Complexity | Bottleneck |
-|---|---|---|
-| Indexing | O(files × entities) | I/O (file reads) |
-| Text search | O(nodes) | SQL LIKE scan |
-| Traversal | O(edges^depth) | BFS on adjacency |
-| Impact | O(edges) | Reverse edge scan |
-| Architecture | O(nodes + edges) | Evidence scoring |
+Parser: 1MiB/2MiB caps, binary guard, timeout 30s, generic fallback, isolated errors. Embedding: model retry 3×, chunked 500, valid-blob filter, hybrid boost, zero-vector fallback. Graph: chunked 1000, WAL retry. Storage: `timeout 10s`, `busy 3×`. Ingestion: 10MiB skip, per-file isolation. Search: clamped, empty fast path, DB try/finally.

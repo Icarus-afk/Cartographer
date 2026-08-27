@@ -5,230 +5,236 @@
 <h1 align="center">Cartographer</h1>
 
 <p align="center">
-  <strong>Repository Intelligence Operating System</strong>
+  <strong>Repository Intelligence — LLM-first Knowledge Graph</strong>
 </p>
 
 <p align="center">
-  Transform any code repository into a navigable semantic knowledge graph.
-  Search, query, and explore your codebase using natural language.
+  Index any repo into a semantic graph. Ask questions, trace dependencies, and save 90%+ tokens — built for humans and for AI agents.
 </p>
 
 <p align="center">
-  <a href="https://github.com/Icarus-afk/Cartographer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/version-0.1.0-green.svg" alt="Version 0.1.0">
+  <img src="https://img.shields.io/badge/version-0.1.0-green.svg" alt="0.1.0">
 </p>
 
 <p align="center">
-  <a href="https://github.com/Icarus-afk/Cartographer"><img src="https://img.shields.io/github/stars/Icarus-afk/Cartographer?style=social" alt="GitHub Stars"></a>
-  <a href="https://github.com/Icarus-afk/Cartographer"><img src="https://img.shields.io/github/forks/Icarus-afk/Cartographer?style=social" alt="GitHub Forks"></a>
-  <a href="https://github.com/Icarus-afk/Cartographer/issues"><img src="https://img.shields.io/github/issues/Icarus-afk/Cartographer" alt="GitHub Issues"></a>
-  <a href="https://github.com/Icarus-afk/Cartographer/pulls"><img src="https://img.shields.io/github/issues-pr/Icarus-afk/Cartographer" alt="GitHub Pull Requests"></a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/tree--sitter-20%20languages-yellow.svg" alt="20 Languages">
-  <img src="https://img.shields.io/badge/MCP-15%20tools-orange.svg" alt="15 MCP Tools">
-  <img src="https://img.shields.io/badge/tests-73%20passed-brightgreen.svg" alt="73 Tests">
-  <img src="https://img.shields.io/badge/benchmark-22%20repos%20%7C%2025K%20files%20%7C%20247K%20nodes-orange.svg" alt="22 Repos">
-  <img src="https://img.shields.io/badge/embedding-bge--small--en--v1.5-384--dim-purple.svg" alt="Embedding Model">
-  <img src="https://img.shields.io/badge/token--savings-99.99%25-red.svg" alt="99.99% Token Savings">
+  <a href="https://github.com/Icarus-afk/Cartographer"><img src="https://img.shields.io/github/stars/Icarus-afk/Cartographer?style=social" alt="Stars"></a>
+  <img src="https://img.shields.io/badge/languages-31-yellow.svg" alt="31 Languages">
+  <img src="https://img.shields.io/badge/MCP-20%20tools-orange.svg" alt="20 MCP Tools">
+  <img src="https://img.shields.io/badge/tests-84%20passed-brightgreen.svg" alt="84 Tests">
+  <img src="https://img.shields.io/badge/embeddings-bge--small--en--v1.5%20%E2%80%A2%20384d%20%E2%80%A2%20hybrid-purple.svg" alt="Hybrid Embeddings">
+  <img src="https://img.shields.io/badge/robust-%E2%80%94%20timeouts%20%E2%80%A2%20chunked%20%E2%80%A2%20retries-red.svg" alt="Robust">
 </p>
 
 ---
 
-Instead of searching for filenames, you ask questions like *"What does the auth module depend on?"* or *"Explain the architecture of this project."* Cartographer builds a graph of all your code's entities (classes, functions, methods, interfaces, etc.) and the relationships between them, then lets you traverse, analyze, and compress that graph.
+**Cartographer turns code into answers.** Instead of grepping filenames, ask *"What does UserService depend on?"* or *"Explain the checkout flow"* — Cartographer builds a graph of classes, functions, files, and edges (calls, inherits, imports) and lets you query it with precision. Every CLI command and every MCP tool supports `--json` for LLM automation with `{"status","data","hint"}` envelopes.
+
+---
+
+## Why Cartographer
+
+- **LLM-first:** Every command has `--json`; every MCP tool returns JSON `{status,human,data,hint}` with clamp/validation. An LLM checks `status` → `index` if empty → `search/file_summary` — no scraping text.
+- **Token savings:** `file_summary` ~200 tokens vs 2000 for a full file (90%); `summarize` ~200 vs 60k for 50 files (98.8%); `impact` ~300 vs 12k grep.
+- **Robust at scale:** 1 MiB/2 MiB caps + binary check + `30s` per-file timeout + generic fallback; isolated per-file errors (one file never kills indexing); chunked graph inserts (`1000`) + `SQLITE_BUSY` retry; embeddings chunked `500` + model retry + valid-blob filtering + hybrid keyword boost; `~22 repos / 25k files / 247k nodes` benchmarked.
+- **31 languages, no lock-in:** Tree-sitter for 20 code grammars + `dart`, `markdown` (ADR/diagram), `yaml/json/toml/sql/html/css/shell/dockerfile/protobuf` via `GenericParser`; missing grammar auto-falls back to regex — add a language by adding an extension, not a parser.
 
 ---
 
 ## Installation
 
-### From source
-
 ```bash
 git clone https://github.com/Icarus-afk/Cartographer.git
 cd Cartographer
-pip install -e .
+pip install -e .                 # core
+pip install -e ".[watch]"        # + watchdog for `cartographer watch`
+pip install -e ".[dev,watch]"    # + ruff/pytest
+
+cartographer version             # cartographer 0.1.0
+cartographer status              # health + indexing check
 ```
 
-Optional watch mode support:
-```bash
-pip install -e ".[watch]"
-```
-
-Verify it works:
-```bash
-cartographer version
-# cartographer 0.1.0
-```
-
-### VS Code Extension
+**VS Code:**
 
 ```bash
 cd editors/vscode
 npm install && npm run compile
-```
-
-Package and install:
-```bash
 npx vsce package
 code --install-extension cartographer-0.1.0.vsix
 ```
 
 ---
 
-## Quick Start
-
-### 1. Index a repository
+## Quick Start (human)
 
 ```bash
-cartographer index /path/to/repo
-```
+# 1. Index
+cartographer index .
 
-Output shows files indexed, languages detected, entities parsed, frameworks found, and cross-file references:
-```
-Indexed 152 files in 24 directories
-Duration: 2431.18ms
-Languages: python: 89, javascript: 43, typescript: 20
-Entities: 152 files parsed, 45 classes, 312 functions, 89 methods
-Frameworks: Django (98% confidence)
-References: 234 cross-file imports
-```
-
-By default the database goes to `~/.cartographer/index.db`. Use `--db` or `CARTOGRAPHER_DB` env var to change it. For per-project isolation, see [Per-Project Configuration](#per-project-configuration).
-
-### 2. Search for symbols
-
-```bash
-cartographer ask "UserService"
-```
-
-```text
-Found 5 result(s):
-  [class       ] UserService
-           src/services/user_service.py
-  [class       ] UserServiceImpl
-           src/services/impl/user_service_impl.py
-  [interface   ] IUserService
-           src/services/user_service.py
-  [function    ] create_user_service
-           src/factories/service_factory.py
-  [method      ] get_user_service
-           src/controllers/user_controller.py
-```
-
-Semantic search (needs `cartographer embed` first):
-```bash
-cartographer ask --semantic "classes that handle user authentication"
-```
-
-### 3. Ask natural language questions
-
-The `query` command auto-detects what you're asking and runs the right analysis:
-
-```bash
-cartographer query "what is the architecture"
-cartographer query "explain Preprocessor"
-cartographer query "what depends on config.py"
-cartographer query "path between cmd and config"
-cartographer query "summarize this project"
-cartographer query "who wrote the auth module"
-```
-
-### 4. Analyze architecture
-
-```bash
-cartographer architecture --detect
-```
-
-Detects layers (Controller, Data, Business, etc.), frameworks (Django, FastAPI, Spring, etc.), architecture patterns (MVC, Layered, Hexagonal, etc.), and dependency flows between layers.
-
-### 5. Graph traversal
-
-```bash
-cartographer neighbors Preprocessor --depth 2
-cartographer impact render.py
-cartographer path "cmd" "config"
+# 2. Check
+cartographer status
 cartographer summarize
+cartographer architecture --detect
+
+# 3. Search (keyword) vs Query (natural language)
+cartographer ask "UserService" --limit 5
+cartographer query "what is the architecture?" --limit 10
+
+# 4. Traverse
+cartographer impact src/auth/service.py
+cartographer neighbors UserService --depth 2
+cartographer path UserController Database
+
+# 5. Human-readable file
+cartographer file-summary src/auth/service.py
 ```
 
-### 6. Semantic embeddings
+**Quick Start (LLM / automation):**
 
 ```bash
-cartographer embed
-cartographer similar "error handling middleware"
+cartographer --json status
+# {"status":"empty","hint":"Run index(path=\".\")"} → then:
+cartographer --json index .
+cartographer --json ask "UserService" --limit 5
+cartographer --json file-summary src/auth/service.py
+# every command: {"status":"ok|empty|error","data":{...},"hint":"..."}
 ```
 
-### 7. Git intelligence
-
-```bash
-cartographer git index --repo-path /path/to/repo
-cartographer git blame Preprocessor
-cartographer git why render.rs
-cartographer git cochange config.rs
-cartographer git authors
-```
-
-### 8. Incremental file watching
-
-Automatically update the graph when files change:
-
-```bash
-cartographer watch /path/to/repo
-```
-
-Or update/delete individual files:
-```bash
-cartographer update-index /path/to/repo/src/main.py
-cartographer delete-file /path/to/repo/src/removed.py
-```
-
-### 9. MCP server (AI assistant integration)
-
-```bash
-cartographer mcp start
-```
-
-Starts a Model Context Protocol server that exposes all Cartographer tools to AI assistants like Claude Desktop, Cursor, and OpenCode. The MCP server supports 15 tools including `search`, `impact`, `neighbors`, `path`, `file_summary` (compressed file summaries that save 90% on token costs), `graph_data` (with pagination and directory filtering), `context` (compressed context packages), `update_index` (incremental re-index), `delete_file`, and `db_info`.
-
----
-
-## Token Savings for AI Agents
-
-Cartographer saves money for coding agents by replacing expensive file reads with compressed graph queries.
-
-| Task | Without Cartographer | With Cartographer | Savings |
-|---|---|---|---|
-| Read a file | 500–2000 tokens | `file-summary` ~200 tokens | **90%** |
-| Repo overview | Read 50+ files (~60K tokens) | `summarize` (~200 tokens) | **98.8%** |
-| Find dependents | grep + read 10+ files (~12K tokens) | `impact` (~300 tokens) | **97.5%** |
-| Architecture | Read configs + dirs (~15K tokens) | `architecture` (~500 tokens) | **96.7%** |
-
-Benchmarked against 22 real-world repos (25K files, 247K nodes, 498K edges across 17 languages). On a Django-sized codebase (2,356 files, 62K nodes): full dump costs $4.85 (Haiku) or $48.47 (GPT-4o) per query; Cartographer costs $0.00004 — **99.99% savings**. See [full benchmarks](docs/benchmarks.md).
-
-A typical 5-turn agent session saves **~96K tokens** (~$0.48 GPT-4). Scale that to a team of 10 doing 20 sessions/day: **~$28,800/month saved**.
-
-### Configure your agent to save tokens
-
-Add to your `opencode.json`, `.cursorrules`, or `.clinerules`:
-
-```
-When analyzing code, always use cartographer tools instead of reading files directly:
-- Use `file-summary` instead of reading full files (90% token savings)
-- Use `summarize` for repo overview instead of reading multiple files
-- Use `impact` to find dependents instead of grepping
-- Use `architecture` for structure instead of exploring directories
+```python
+# MCP (Opencode, Claude Desktop, Cursor)
+# opencode.json already has: { "mcp": { "cartographer": { "command": ["cartographer-mcp"] } } }
+# Tools: status, ensure_indexed, search, file_summary, impact, neighbors, path, ask, summarize, architecture, similar, graph_data, index, context, update_index, delete_file, db_info, list_repos, doctor, health
 ```
 
 ---
 
-## Per-Project Configuration
+## CLI Reference
 
-Place a `.cartographer/config.json` in your project root to customize behavior:
+Global flags (before subcommand): `--db PATH` (`$CARTOGRAPHER_DB`), `--json`, `--verbose/-v`, `--quiet/-q`, `-h/--help`.
+
+| Command | What it does | Example |
+|---|---|---|
+| `status` / `doctor` / `health` | DB + indexing + health (`tree_sitter/fastembed/mcp`, 31 langs) | `cartographer --json status` |
+| `init [path] [--force]` | Init project DB + index | `cartographer init .` |
+| `index [path]` | Index repo (idempotent) → `{files, languages, frameworks}` | `cartographer --json index /path` |
+| `ask <query> [-t type] [-r repo] [-l 1-100] [-s]` | Keyword search (use `query` for NL) | `cartographer ask "UserService" -t class` |
+| `query <text> [-r repo] [-l 1-100]` | Natural-language query (intent: search/explain/impact/path/architecture/summarize) | `cartographer query "explain checkout"` |
+| `impact <target> [-r repo]` | Reverse deps (who imports/calls) | `cartographer --json impact UserService` |
+| `neighbors <name> [-r repo] [-d 1-5]` | Graph traversal | `cartographer neighbors UserService -d 2` |
+| `path <from> <to> [--max-depth 1-10]` | Shortest path | `cartographer path UserController DB` |
+| `summarize [-r repo]` | Repo overview `{total_nodes, node_breakdown, top_files}` | `cartographer --json summarize` |
+| `context [--top-n 10] [--max-tokens 1500]` | Compressed context package (summary+arch+nodes) | `cartographer context --top-n 20` |
+| `architecture [--detect] [--verbose]` | Layers/patterns/frameworks | `cartographer architecture --detect` |
+| `embed [-r repo]` | Generate `bge-small-en-v1.5` 384-d embeddings (chunked 500, retry, valid-blob filter) | `cartographer embed` |
+| `similar <target> [-r repo] [-l 1-100]` | Hybrid semantic search (cosine + keyword boost) | `cartographer similar "auth middleware"` |
+| `file-summary <path> [-r repo]` | ~200-token file summary vs 2000 | `cartographer file-summary src/main.py` |
+| `graph-data [-r repo] [-l 80] [-o offset] [-d dir] [--expand-node-id N]` | JSON for graph viz | `cartographer graph-data --dir src/` |
+| `watch [path] [-v]` | Incremental `update_index/delete_file` on change (all 31 langs) | `cartographer watch .` |
+| `update-index <file>` | Re-parse single file + re-embed | `cartographer update-index src/main.py` |
+| `delete-file <file>` | Remove file nodes + re-embed | `cartographer delete-file src/old.py` |
+| `git index [-p path]` / `blame` / `why` / `cochange` / `author` / `authors` | Git history | `cartographer git index --repo-path .` |
+| `repo list` / `repo remove <name>` | Multi-repo DB | `cartographer repo list` |
+| `db info` / `db vacuum` | DB stats / VACUUM | `cartographer db info --json` |
+| `mcp start [--db PATH] [--port N] [--verbose]` | MCP stdio/SSE server | `cartographer mcp start` |
+| `version` | Version | `cartographer --json version` |
+
+`--json` everywhere returns `{"status":"ok|empty|error","data":{...},"hint":"try ..."}` — preferred for agents. Limits are clamped (`1-100`), empty query → `[]`, missing DB → `hint`.
+
+---
+
+## MCP for LLMs
+
+`cartographer-mcp` (stdio) exposes via `FastMCP` with workflow instructions:
+
+> 1) `status()` → if empty `index(path=".")`  
+> 2) `search` (exact), `ask` (NL), `file_summary` (90% savings)  
+> 3) `impact/neighbors/path` for deps  
+> 4) `architecture/similar/graph_data` for structure/semantics
+
+**Tools (20):** `status, doctor, health, list_repos, ensure_indexed, search, impact, neighbors, path, summarize, architecture, similar, ask, graph_data, index, context, update_index, delete_file, db_info, file_summary` + resources `cartographer://repos` / `cartographer://repo/{name}` / `cartographer://node/{id}`.
+
+Each has rich description with params, return shape, example, and `hint` on empty/error. `search`/`similar` clamp `limit 1-100`, `neighbors` `depth 1-5`, `path` `max_depth 1-10`, `graph_data` `limit 1-500`. Per-project DB detection mirrors CLI (`.cartographer/config.json` + `$CARTOGRAPHER_DB`).
+
+**Opencode / Claude Desktop:**
+
+```json
+// opencode.json
+{ "mcp": { "cartographer": { "type": "local", "command": ["cartographer-mcp"], "enabled": true } } }
+```
+
+```json
+// claude_desktop_config.json
+{ "mcpServers": { "cartographer": { "command": "cartographer-mcp", "args": [] } } }
+```
+
+Agent rule (save ~96k tokens / 5-turn session):
+
+```
+When analyzing code, use cartographer tools, not raw reads:
+- file_summary instead of reading files (90%)
+- summarize for overview
+- impact instead of grep
+- architecture for structure
+```
+
+---
+
+## Supported Languages (31)
+
+| Category | Languages |
+|---|---|
+| Code (20 Tree-sitter) | `python`, `javascript`, `typescript`, `tsx`, `go`, `rust`, `java`, `kotlin`, `csharp`, `php`, `ruby`, `c`, `cpp`, `swift`, `scala`, `elixir`, `lua`, `julia`, `zig`, `groovy` |
+| New (3 dedicated) | `dart` (regex + `tree_sitter_dart` if present), `markdown` (headings `markdown`/`adr`, `mermaid`→`diagram`, wiki links), `protobuf` |
+| Generic (8 via `GenericParser`) | `yaml` (`.yaml/.yml`), `json`, `toml`, `sql`, `html` (`.html/.htm`), `css` (`.css/.scss/.less`), `shell` (`.sh/.bash/.zsh/.fish` + `Makefile`), `dockerfile` |
+
+Missing grammar → `GenericParser` regex (`class/struct/interface/enum` + `func/function/def/fn` + `import`) — not a crash. Add a language by `register_parser(Language.MY, MyParser, [".myext"])` plus `LANGUAGE_EXTENSIONS`.
+
+`EMBEDDABLE_TYPES`: `class, function, method, file, interface, enum, type_alias` (others indexed but not embedded).
+
+---
+
+## How It Works
+
+```
+discover_files (.gitignore + .cartographerignore, 10MiB skip, symlink loop guard)
+  → detect_languages / fingerprint_frameworks / package_managers
+  → _parse_repository (ThreadPool 8, 30s timeout, per-file isolation, Generic fallback)
+    → BaseParser (1MiB/2MiB caps, b"\x00" check, has_error, errors=replace)
+  → extract_references (import regex per lang, suffix-index, 199 edges)
+  → extract_schema (Django/JPA/Prisma/SQL)
+  → build_graph (reclassify Controller/Service…, chunked 1000, SQLITE_BUSY retry, WAL)
+  → embeddings (bge-small-en-v1.5, 384d, chunked 500, retry 3×, valid-blob filter, hybrid keyword boost)
+  → storage (SQLite WAL, busy_timeout 5s, indices on repo/type/file_path/name)
+```
+
+- **Ingestion:** `ThreadPoolExecutor(min(cpu,8))` + `as_completed(timeout=30s)`, per-file `try/except` → never kills whole index; `30s` timeout + generic fallback.
+- **Discovery:** `TEXT_EXTENSIONS` includes all 31 langs, `BINARY_EXTENSIONS` skip, `MAX_DISCOVER_FILE_BYTES 10MiB`, `.git`/`node_modules`/`__pycache__` ignored.
+- **Graph:** `nodes(id,repo,type,name,file_path,metadata_json)`, `edges(id,repo,src,tgt,edge_type)` (`CONTAINS/DEFINES/DECLARES/CALLS/INHERITS/IMPLEMENTS/DECORATES/IMPORTS`), `architecture`/`commits`/`embeddings(vector BLOB)`.
+- **Embeddings:** `TextEmbedding` pooled, `EMBEDDING_BATCH_SIZE 256`, `parallelism 0`, `hybrid` boost `+0.1*overlap` when `cosine<0.35`, filter `<0.15`.
+- **Retrieval:** `search_nodes` (name `LIKE`, type priority, `ref_count` log-norm, depth) + `impact_analysis` (transitive `target_id`), `get_neighbors` DFS, `find_path` BFS, `generate_summary`.
+
+---
+
+## VS Code Extension
+
+`editors/vscode` — MCP-first (`ClientManager` per workspace folder) + CLI fallback, `cartographer.dbPath/binPath/maxResults/autoReindex/graphLimit/mcpEnabled`.
+
+Features: D3 graph (pagination `offset`, `dir` filter, expand, zoom `0.05x-15x`), incremental watch (batched 2s, `update_index/delete_file`), multi-root, per-project `.cartographer/config.json` live-reload, entity browser, hover (`300ms` debounce + 60s cache), status bar `graph N/E`.
+
+Commands (`Ctrl+Shift+C`): `Index`, `Graph`, `Search`, `Ask`, `Watch`, `DB Info`, `Context`, `File Summary` + `Summarize`, `Architecture`, `Impact`, `Neighbors`, `Path`, `Similar`, `Embed`, `Git Index`, `Select DB`, `Refresh`.
+
+`npm install && npm run compile` / `npx vsce package`.
+
+---
+
+## Configuration
+
+**Per-project** `.cartographer/config.json` (CLI + MCP + VSCode all read):
 
 ```json
 {
-  "dbPath": ".cartographer/my-project.db",
+  "dbPath": ".cartographer/my.db",
   "autoReindex": true,
   "watch": false,
   "mcpPort": 0,
@@ -237,207 +243,19 @@ Place a `.cartographer/config.json` in your project root to customize behavior:
 }
 ```
 
-| Option | Default | Description |
+Resolution: `--db` > `$CARTOGRAPHER_DB` > `.cartographer/config.json` `dbPath` > `.cartographer/data.db` > `~/.cartographer/index.db`.
+
+**Env:**
+
+| Var | Default | Desc |
 |---|---|---|
-| `dbPath` | `.cartographer/data.db` | Database path (relative to project root or absolute) |
-| `autoReindex` | `true` | Auto-update the graph when files are saved (VS Code extension) |
-| `watch` | `false` | Enable file system watching via watchdog (CLI) |
-| `mcpPort` | `0` | Run MCP server on a TCP port (0 = stdio) |
-| `graphLimit` | `400` | Max nodes in graph visualization |
-| `maxResults` | `40` | Default max search results |
+| `CARTOGRAPHER_DB` | `~/.cartographer/index.db` | DB path |
+| `CARTOGRAPHER_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | HF model |
+| `CARTOGRAPHER_EMBEDDING_DIM` | `384` | Dim |
+| `CARTOGRAPHER_EMBEDDING_BATCH_SIZE` | `256` | Batch |
+| `CARTOGRAPHER_EMBEDDING_PARALLELISM` | `0` | `0`=auto |
 
----
-
-## VS Code Extension
-
-The VS Code extension provides an interactive knowledge graph, entity browser, and search right in your editor.
-
-### Features
-
-- **Interactive Graph Visualization** — dynamic D3 force graph with pagination ("Load More"), directory tree sidebar filter, debounced search, click-to-expand neighbors, cluster-by-directory layout, zoom (0.05x-15x), and smart labels
-- **Incremental File Watching** — files are re-indexed incrementally on save, delete, or rename (no full re-scan); changes are batched and debounced
-- **Multi-Root Workspace Support** — each workspace folder gets its own client, database, and MCP connection; commands resolve to the active folder automatically; graph view shows a folder picker
-- **MCP-First Architecture** — persistent MCP connection for all tools; transparent fallback to CLI if MCP is unavailable
-- **Per-Project Config** — `.cartographer/config.json` read per workspace folder, live-reloaded on change
-- **Entity Browser** — tree view shows nodes by type, click to search
-- **Hover Provider** — debounced hover shows entity info from the knowledge graph
-- **Search + Impact + Path** — all graph tools available from the command palette
-
-### Available Commands
-
-| Command | Keybinding | Description |
-|---|---|---|
-| `Cartographer: Index Repository` | `Ctrl+Shift+C I` | Index all workspace folders |
-| `Cartographer: Open Graph Visualization` | `Ctrl+Shift+C G` | Interactive knowledge graph |
-| `Cartographer: Search Graph` | `Ctrl+Shift+C S` | Search entities by name |
-| `Cartographer: Ask a Question` | `Ctrl+Shift+C A` | Natural language query |
-| `Cartographer: Watch for File Changes` | `Ctrl+Shift+C W` | Watch via watchdog CLI |
-| `Cartographer: Database Info` | `Ctrl+Shift+C D` | Show DB statistics |
-| `Cartographer: Generate Context Package` | `Ctrl+Shift+C C` | Summary + architecture + key nodes |
-| `Cartographer: File Summary` | `Ctrl+Shift+C F` | Compressed file summary (~200 tokens) |
-| `Cartographer: Repository Summary` | | Node/edge counts and breakdowns |
-| `Cartographer: Detect Architecture` | | Detect layers and patterns |
-| `Cartographer: Impact Analysis` | | Find dependents of a symbol |
-| `Cartographer: Show Neighbors` | | Traverse the graph |
-| `Cartographer: Find Path` | | Shortest path between two nodes |
-| `Cartographer: Similar Entities` | | Semantic similarity search |
-| `Cartographer: Generate Embeddings` | | Vector embeddings for semantic search |
-| `Cartographer: Index Git History` | | Git commit tracking |
-| `Cartographer: Select Database` | | Pick a different database |
-| `Cartographer: Refresh Views` | | Refresh all tree views |
-
-### Extension Settings
-
-| Setting | Default | Description |
-|---|---|---|
-| `cartographer.dbPath` | `""` | Override database path (per-project config takes precedence) |
-| `cartographer.binPath` | `"cartographer"` | CLI binary path |
-| `cartographer.maxResults` | `20` | Max search results |
-| `cartographer.autoReindex` | `true` | Auto re-index on file save |
-| `cartographer.graphLimit` | `400` | Max graph nodes |
-| `cartographer.mcpEnabled` | `true` | Use persistent MCP connection |
-
----
-
-## All CLI Commands
-
-| Command | Description |
-|---|---|
-| `index` | Index a repository into the knowledge graph |
-| `ask` | Search the graph (text or `--semantic`) |
-| `query` | Natural language query with auto intent detection |
-| `impact` | Analyze what depends on a file or symbol |
-| `neighbors` | Show neighbors of a node |
-| `path` | Find shortest path between two nodes |
-| `summarize` | Generate repository summary |
-| `context` | Generate a structured context package |
-| `embed` | Generate vector embeddings for semantic search |
-| `similar` | Find semantically similar nodes |
-| `architecture` | Detect or show repository architecture |
-| `graph-data` | Export graph as JSON (supports `--offset`, `--dir`, `--expand-node-id`) |
-| `file-summary` | Compressed file summary (~200 tokens vs ~2000 for full file) |
-| `watch` | Watch a repo for changes and auto-update (requires watchdog) |
-| `update-index` | Incrementally re-index a single file |
-| `delete-file` | Remove a deleted file from the graph |
-| `git index` | Index git history (commits, authors, changes) |
-| `git blame` | Show commit history for a file or symbol |
-| `git author` | Show an author's contributions |
-| `git cochange` | Find files that change together |
-| `git why` | Find which commit introduced a symbol |
-| `git authors` | List all authors |
-| `mcp start` | Start MCP server for AI assistant integration |
-| `mcp stop` | Stop a running MCP server |
-| `repo list` | List all indexed repositories |
-| `repo remove` | Remove a repository and its data |
-| `db vacuum` | Reclaim storage space (VACUUM) |
-| `db info` | Show database statistics |
-| `version` | Show version |
-
-### Common options
-
-- `--db PATH`, `CARTOGRAPHER_DB` env var — specify database path (default: `~/.cartographer/index.db`)
-- `--repo`, `-r` — filter by repository name (for multi-repo databases)
-- `--max-tokens`, `-m` — compress output to fit a token budget (for LLM context windows)
-- `--limit`, `-l` — limit number of results
-- `--type`, `-t` — filter by node type
-- `--offset`, `-o` — skip N hub groups for graph pagination
-- `--dir`, `-d` — filter graph by directory prefix
-- `--expand-node-id` — fetch a specific node and its immediate neighbors
-
----
-
-## Environment Configuration
-
-| Variable | Default | Description |
-|---|---|---|
-| `CARTOGRAPHER_DB` | `~/.cartographer/index.db` | Path to the SQLite database |
-| `CARTOGRAPHER_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model name (HuggingFace) |
-| `CARTOGRAPHER_EMBEDDING_DIM` | `384` | Model output dimension |
-| `CARTOGRAPHER_EMBEDDING_BATCH_SIZE` | `256` | Embedding batch size |
-| `CARTOGRAPHER_EMBEDDING_PARALLELISM` | `0` | CPU threads (0 = auto) |
-
----
-
-## How It Works
-
-Cartographer has a modular pipeline architecture:
-
-1. **Ingestion Engine** — walks the file tree, detects languages and frameworks, skips binaries and ignored files (`.gitignore` + `.cartographerignore`). Supports incremental `update_index` for single-file changes.
-2. **Parser Engine** — 20 Tree-sitter language parsers (Python, JS, TS/TSX, Go, Rust, Java, Kotlin, C#, PHP, Ruby, C, C++, Swift, Scala, Elixir, Lua, Julia, Zig, Groovy) with inheritance, implementation, calls, docstrings, and metadata extraction
-3. **Graph Engine** — SQLite persistence with nodes, edges, directories, embeddings, and git metadata. Supports incremental `update_file_in_graph` and `delete_file_from_graph`.
-4. **Retrieval Engine** — search, traversal, impact analysis, path finding, summarization
-5. **Architecture Engine** — multi-strategy layer detection, pattern matching, dependency flow
-6. **Embedding Engine** — fastembed + bge-small-en-v1.5 (384-dim) for semantic search; numpy-batched similarity (280x faster than pure Python)
-7. **Git Intelligence Engine** — commit/author tracking, co-change analysis, why-introduced queries
-8. **Compression Engine** — token-aware output compression (4 strategies for LLM context budgets)
-9. **Query Planner** — intent-driven NL query classification (9 intent types)
-10. **MCP Server** — exposes all tools via Model Context Protocol for AI assistants. Tools: `search`, `impact`, `neighbors`, `path`, `similar`, `ask`, `architecture`, `summarize`, `file_summary` (90% token savings per file read), `graph_data`, `index`, `context`, `update_index`, `delete_file`, `db_info`, plus resources for repos/nodes.
-11. **VS Code Extension** — MCP-first TypeScript client with CLI fallback, interactive graph visualization, entity browser, hover provider, incremental file watcher, multi-root workspace support, and per-project configuration.
-
----
-
-## Supported Languages
-
-| Language | Parser | Inheritance | Interfaces | Calls | Docstrings | Metadata |
-|---|---|---|---|---|---|---|
-| Python | `PythonParser` | INHERITS/IMPLEMENTS | - | YES | YES | decorators, parameters |
-| JavaScript | `JavaScriptParser` | INHERITS | - | YES | - | - |
-| TypeScript | `TypeScriptParser` | INHERITS | YES (members) | YES | - | type_parameters |
-| TSX | `TSXParser` | INHERITS | YES (members) | YES | - | type_parameters |
-| Go | `GoParser` | - | - | YES | YES | exported |
-| Rust | `RustParser` | INHERITS/IMPLEMENTS | YES (traits) | YES | YES | public, return_type |
-| Java | `JavaParser` | INHERITS/IMPLEMENTS | YES | YES | YES | modifiers |
-| Kotlin | `KotlinParser` | INHERITS/IMPLEMENTS | - | YES | - | - |
-| C# | `CSharpParser` | INHERITS | YES (members) | YES | YES | - |
-| PHP | `PHPPhpParser` | INHERITS/IMPLEMENTS | YES | YES | - | - |
-| Ruby | `RubyParser` | INHERITS | - | YES | - | - |
-| C | `CParser` | - | - | YES | - | - |
-| C++ | `CppParser` | - | YES (concepts) | YES | - | - |
-| Swift | `SwiftParser` | INHERITS | YES (members) | YES | - | - |
-| Scala | `ScalaParser` | INHERITS/IMPLEMENTS | YES (traits) | YES | - | - |
-| Elixir | `ElixirParser` | IMPLEMENTS | YES (protocols) | YES | - | - |
-| Lua | `LuaParser` | - | - | YES | - | - |
-| Julia | `JuliaParser` | - | - | YES | - | - |
-| Zig | `ZigParser` | - | YES (error sets) | YES | - | - |
-| Groovy | `GroovyParser` | INHERITS/IMPLEMENTS | YES | YES | - | - |
-
----
-
-## Dependencies
-
-| Dependency | Purpose |
-|---|---|
-| Python 3.10+ | Runtime |
-| click 8.1+ | CLI framework |
-| Tree-sitter 0.23+ | AST parsing for 20 languages |
-| mcp 1.0+ | Model Context Protocol server |
-| fastembed 0.8+ | Vector embeddings for semantic search |
-| pathspec | `.gitignore` pattern matching |
-| watchdog 4.0+ | File system watching (optional) |
-| numpy | Batched similarity computation |
-
-Tree-sitter language grammars are downloaded on demand when you index a file in that language. The embedding model (default `BAAI/bge-small-en-v1.5`, ~33MB) downloads on first `cartographer embed`.
-
----
-
-## Documentation
-
-| Document | Description |
-|---|---|
-| [Getting Started](docs/getting-started.md) | Installation, first index, quick start workflows |
-| [Command Reference](docs/commands.md) | All commands, options, and examples |
-| [Architecture Deep Dive](docs/architecture.md) | How the system works internally |
-| [Technical Reference](docs/technical.md) | Comprehensive technical architecture |
-| [OpenCode Integration](docs/opencode.md) | Using Cartographer with AI coding assistants |
-| [Benchmarks](docs/benchmarks.md) | Performance data: 25K files, 247K nodes, 498K edges across 22 real-world repos in 17 languages |
-| [Whitepaper](docs/whitepaper.md) | Full technical whitepaper |
-| [Troubleshooting](docs/troubleshooting.md) | Common issues and solutions |
-
-### Community
-
-- [Contributing Guidelines](CONTRIBUTING.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Security Policy](SECURITY.md)
+**`make`:** `lint` (`ruff`), `test` (`pytest -v`, 84 tests).
 
 ---
 
@@ -445,16 +263,25 @@ Tree-sitter language grammars are downloaded on demand when you index a file in 
 
 ```bash
 pip install -e ".[dev,watch]"
-make lint    # ruff check cartographer/ tests/
-make test    # pytest -v (73 tests)
+make lint && make test
 ```
 
-## License
+Structure: `cartographer/ingestion`, `parser/{base,registry,languages/*.py}`, `graph/builder`, `storage/connection`, `embedding/engine`, `retrieval/{searcher,traversal,summarizer}`, `architecture/engine`, `git/engine`, `query/engine`, `compression/engine`, `cli.py`, `mcp/server.py`.
 
-MIT — see [LICENSE](LICENSE) for details.
+Add a language:
+
+```python
+from cartographer.parser.registry import register_parser
+from cartographer.core.models import Language
+from cartographer.parser.base import BaseParser
+class MyParser(BaseParser): ...
+register_parser(Language.MY, MyParser, [".my"])
+```
 
 ---
 
-<p align="center">
-  Built with Tree-sitter, SQLite, and fastembed.
-</p>
+## License
+
+MIT — see `LICENSE`.
+
+<p align="center">Built with Tree-sitter, SQLite, fastembed — for humans and for agents.</p>
