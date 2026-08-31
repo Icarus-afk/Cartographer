@@ -1,0 +1,12 @@
+sequenceDiagram
+    participant LLM as LLM (Agent)
+    participant CLI as CLI --json
+    participant Graph as Graph (SQLite WAL)
+    LLM->>CLI: cartographer --json status
+    CLI-->>LLM: {"status":"empty","hint":"Run index"}
+    LLM->>CLI: cartographer --json index .
+    CLI-->>LLM: {"status":"ok","files":206,"duration_ms":377}
+    LLM->>CLI: cartographer --json ask "UserService"
+    CLI-->>LLM: {"status":"ok","count":5,"results":[...]}
+    LLM->>CLI: cartographer --json file_summary src/auth/service.py
+    CLI-->>LLM: {"status":"ok","data":{"entities":{...}}} 200 tokens

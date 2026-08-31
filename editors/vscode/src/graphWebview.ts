@@ -155,16 +155,36 @@ function getHtml(
   gd: GraphData, entityType: string | undefined,
   webview: vscode.Webview, extensionUri: vscode.Uri,
 ): string {
+  // Handle empty state — show welcome instead of blank graph (fixes NAN confusion)
+  const totalNodes = Number.isFinite(gd.total_nodes) ? gd.total_nodes! : gd.nodes.length;
+  const totalEdges = Number.isFinite(gd.total_edges) ? gd.total_edges! : gd.edges.length;
+  if (gd.nodes.length === 0 && totalNodes === 0) {
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+      body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;background:var(--vscode-editor-background);color:var(--vscode-editor-foreground);text-align:center;padding:24px}
+      .welcome{max-width:480px}
+      h2{font-size:20px;margin-bottom:12px}
+      p{color:var(--vscode-descriptionForeground);font-size:13px;line-height:1.5;margin-bottom:16px}
+      button{background:var(--vscode-button-background);color:var(--vscode-button-foreground);border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:13px}
+      button:hover{background:var(--vscode-button-hoverBackground)}
+      code{background:var(--vscode-textCodeBlock-background);padding:2px 6px;border-radius:3px;font-size:12px}
+    </style></head><body><div class="welcome">
+      <h2>Welcome to Cartographer</h2>
+      <p>No graph data yet. Index a repository to see its knowledge graph, search, and AI tools.</p>
+      <p><code>cartographer index .</code> or run <b>Cartographer: Index Repository</b> from the Command Palette.</p>
+      <button onclick="acquireVsCodeApi().postMessage({command:'alert',text:'Run Cartographer: Index Repository from Command Palette (Ctrl+Shift+C I)'})">How to index</button>
+    </div></body></html>`;
+  }
+
   const typeEntries = Object.entries(gd.node_types || {}).sort((a, b) => b[1] - a[1]);
   const typeRows = typeEntries.map(([t, c]) =>
-    `<div class="stat"><span>${t}</span><span class="val">${c}</span></div>`
+    `<div class="stat"><span>${t}</span><span class="val">${Number.isFinite(c) ? c : 0}</span></div>`
   ).join("\n");
 
   const dirs = gd.directories || [];
   const dirRows = dirs.slice(0, 30).map(d =>
     `<div class="dir-item" onclick="filterDir('${esc(d.path)}')">` +
     `<span class="dir-path">${esc(d.path)}</span>` +
-    `<span class="dir-count">${d.count}</span></div>`
+    `<span class="dir-count">${Number.isFinite(d.count) ? d.count : 0}</span></div>`
   ).join("\n");
 
   const nodesJson = JSON.stringify(gd.nodes);

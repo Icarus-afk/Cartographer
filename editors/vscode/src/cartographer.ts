@@ -264,28 +264,46 @@ export class CartographerClient {
     } catch { return null; }
   }
 
+  private toNumber(v: any): number {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const n = parseInt(v.replace(/,/g, "").trim(), 10);
+      return Number.isFinite(n) ? n : 0;
+    }
+    if (v != null) {
+      const n = Number(String(v).replace(/,/g, ""));
+      return Number.isFinite(n) ? n : 0;
+    }
+    return 0;
+  }
+
   private parseSummary(out: string): Summary | null {
     const j = this.tryJson(out);
     if (j) {
-      const data = j.data || j;
-      if (data.name || data.total_nodes !== undefined) {
-        return {
-          name: data.name || "",
-          path: data.path || "",
-          total_nodes: data.total_nodes || data.nodes || 0,
-          total_edges: data.total_edges || data.edges || 0,
-          node_breakdown: data.node_breakdown || {},
-          edge_breakdown: data.edge_breakdown || {},
-        };
+      // Handle all JSON shapes: {summary:{...}}, {data:{...}}, {data:{summary:{...}}}, direct
+      const candidates = [j.data?.summary, j.summary, j.data, j];
+      for (const data of candidates) {
+        if (data && (data.name || data.total_nodes !== undefined || data.total_edges !== undefined)) {
+          return {
+            name: String(data.name || data.repo || "").trim(),
+            path: String(data.path || data.repo_path || "").trim(),
+            total_nodes: this.toNumber(data.total_nodes ?? data.nodes ?? data.totalNodes ?? 0),
+            total_edges: this.toNumber(data.total_edges ?? data.edges ?? data.totalEdges ?? 0),
+            node_breakdown: data.node_breakdown || data.nodeTypes || {},
+            edge_breakdown: data.edge_breakdown || data.edgeTypes || {},
+          };
+        }
       }
-      if (data.summary) return this.parseSummary(JSON.stringify(data.summary));
+      // Fallback: if JSON but no candidate matched, try to find summary nested
+      if (j.data?.summary) return this.parseSummary(JSON.stringify(j.data.summary));
+      if (j.summary) return this.parseSummary(JSON.stringify(j.summary));
     }
     const lines = out.split("\n");
     const s: Summary = {
       name: lines[0]?.replace("Repository: ", "").trim() || "",
       path: lines[1]?.replace("Path: ", "").trim() || "",
-      total_nodes: parseInt(lines[2]?.replace("Total nodes: ", "").trim() || "0"),
-      total_edges: parseInt(lines[3]?.replace("Total edges: ", "").trim() || "0"),
+      total_nodes: this.toNumber(lines[2]?.replace("Total nodes: ", "").trim() || "0"),
+      total_edges: this.toNumber(lines[3]?.replace("Total edges: ", "").trim() || "0"),
       node_breakdown: {}, edge_breakdown: {},
     };
     let section: string | null = null;
@@ -296,8 +314,9 @@ export class CartographerClient {
       else if (section && /^\s{2}\S/.test(l)) {
         const parts = l.trim().split(": ");
         if (parts.length === 2) {
-          if (section === "nodes") s.node_breakdown[parts[0].trim()] = parseInt(parts[1].trim());
-          else s.edge_breakdown[parts[0].trim()] = parseInt(parts[1].trim());
+          const n = this.toNumber(parts[1].trim());
+          if (section === "nodes") s.node_breakdown[parts[0].trim()] = n;
+          else s.edge_breakdown[parts[0].trim()] = n;
         }
       }
     }
@@ -419,7 +438,7 @@ export class CartographerClient {
       if (r.exitCode === 0) {
         return r.stdout.trim().split("\n").filter(Boolean).map(line => {
           const [name, path, nodes, edges] = line.split("|");
-          return { name, path, nodes: parseInt(nodes || "0"), edges: parseInt(edges || "0") };
+          return { name, path, nodes: this.toNumber(nodes), edges: this.toNumber(edges) };
         });
       }
       throw new Error(r.stderr?.trim() || `exit ${r.exitCode}`);
@@ -449,9 +468,19 @@ export class CartographerClient {
       if (dir) { mcpArgs.dir = dir; cliArgs.push("--dir", dir); }
       if (expandNodeId !== undefined) { mcpArgs.expand_node_id = expandNodeId; cliArgs.push("--expand-node-id", String(expandNodeId)); }
       const out = await this.mcpOrCli("graph_data", mcpArgs, () => this.exec(cliArgs), 15_000);
-      const d = JSON.parse(out);
-      if (d.error) { this.output.appendLine(`getGraphData error: ${d.error}`); return { nodes: [], edges: [], node_types: {}, directories: [] }; }
-      return d;
+      const parsed = JSON.parse(out);
+      // MCP returns {status:"ok",data:{nodes,...}} while CLI returns {nodes,...} directly
+      const d = (parsed && typeof parsed === "object" && "data" in parsed && parsed.data && typeof parsed.data === "object" && "nodes" in parsed.data) ? (parsed as any).data : parsed;
+      const err = (d as any)?.error || (parsed as any)?.error;
+      if (err) { this.output.appendLine(`getGraphData error: ${err}`); return { nodes: [], edges: [], node_types: {}, directories: [] }; }
+      // Normalize to ensure numbers are always finite
+      const nodes = Array.isArray((d as any).nodes) ? (d as any).nodes : [];
+      const edges = Array.isArray((d as any).edges) ? (d as any).edges : [];
+      const node_types = (d as any).node_types || (d as any).nodeTypes || {};
+      const directories = Array.isArray((d as any).directories) ? (d as any).directories : [];
+      const total_nodes = this.toNumber((d as any).total_nodes ?? (d as any).totalNodes ?? nodes.length);
+      const total_edges = this.toNumber((d as any).total_edges ?? (d as any).totalEdges ?? edges.length);
+      return { nodes, edges, node_types, directories, total_nodes, total_edges };
     } catch (e) {
       this.output.appendLine(`getGraphData failed: ${e}`);
       return { nodes: [], edges: [], node_types: {}, directories: [] };

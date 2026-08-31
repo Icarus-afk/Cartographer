@@ -97,18 +97,32 @@ export class ClientManager {
     try { return await c.summarize(); } catch { return null; }
   }
 
+  private toNum(v: any): number {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const n = parseInt(v.replace(/,/g, ""), 10);
+      return Number.isFinite(n) ? n : 0;
+    }
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+
   /** Aggregate all folder summaries (parallel) */
   async allSummaries(): Promise<{ folder: string; name: string; nodes: number; edges: number }[]> {
     const folders = this.allFolders();
     const results = await Promise.allSettled(
       folders.map(async ({ folder, client }) => {
-        const s = await client.summarize();
-        if (s) return { folder, name: s.name, nodes: s.total_nodes, edges: s.total_edges };
+        try {
+          const s = await client.summarize();
+          if (s) return { folder, name: String(s.name || ""), nodes: this.toNum((s as any).total_nodes ?? (s as any).nodes), edges: this.toNum((s as any).total_edges ?? (s as any).edges) };
+        } catch (e) {
+          this.output.appendLine(`allSummaries failed for ${folder}: ${e}`);
+        }
         return null;
       })
     );
     return results.filter((r): r is PromiseFulfilledResult<{ folder: string; name: string; nodes: number; edges: number }> =>
-      r.status === 'fulfilled' && r.value !== null
-    ).map(r => r.value);
+      r.status === 'fulfilled' && r.value !== null && Number.isFinite(r.value.nodes) && Number.isFinite(r.value.edges)
+    ).map(r => ({ ...r.value, nodes: this.toNum(r.value.nodes), edges: this.toNum(r.value.edges) }));
   }
 }

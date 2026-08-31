@@ -34,6 +34,16 @@ export class RepoTreeProvider implements vscode.TreeDataProvider<RepoItem> {
 
   getTreeItem(el: RepoItem): vscode.TreeItem { return el; }
 
+  private safeNum(v: any): number {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const n = parseInt(v.replace(/,/g, ""), 10);
+      return Number.isFinite(n) ? n : 0;
+    }
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+
   async getChildren(el?: RepoItem): Promise<RepoItem[]> {
     if (el) return [];
     const items: RepoItem[] = [];
@@ -46,12 +56,15 @@ export class RepoTreeProvider implements vscode.TreeDataProvider<RepoItem> {
           hasData = true;
           const folderName = vscode.workspace.workspaceFolders
             ?.find(f => f.uri.fsPath === folder)?.name || folder.split("/").pop() || folder;
+          const nodes = this.safeNum((s as any).total_nodes ?? (s as any).nodes);
+          const edges = this.safeNum((s as any).total_edges ?? (s as any).edges);
+          const name = String((s as any).name || folderName);
           items.push(new RepoItem(
-            `${folderName}: ${s.name}`,
-            `${s.total_nodes} nodes · ${s.total_edges} edges`,
+            `${folderName}: ${name}`,
+            `${nodes} nodes · ${edges} edges`,
             vscode.TreeItemCollapsibleState.Collapsed,
             "repo",
-            { command: "cartographer.summarize", title: "Summary", arguments: [s.name] },
+            { command: "cartographer.summarize", title: "Summary", arguments: [name] },
             folder,
           ));
         }

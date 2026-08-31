@@ -13,6 +13,16 @@ let statusBar: vscode.StatusBarItem;
 let summaryCache: Map<string, { summary: any; time: number }> = new Map();
 const SUMMARY_CACHE_TTL = 30000; // 30 seconds
 
+function safeNum(v: any): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = parseInt(v.replace(/,/g, ""), 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export function activate(_ctx: vscode.ExtensionContext): void {
   ctx = _ctx;
   const ch = vscode.window.createOutputChannel("Cartographer");
@@ -163,12 +173,17 @@ export function activate(_ctx: vscode.ExtensionContext): void {
       if (cfg.autoReindex === false) continue;
       try {
         const s = await c.summarize();
-        if (s) { indexed.push(f.name); continue; }
+        if (s && safeNum((s as any).total_nodes) > 0) { indexed.push(f.name); continue; }
       } catch { /* not indexed */ }
-      await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: `Cartographer: Indexing ${f.name}...` },
-        async () => { await c.index(); },
-      );
+      try {
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `Cartographer: Indexing ${f.name}...` },
+          async () => { await c.index(); },
+        );
+      } catch (e) {
+        ch.appendLine(`Index failed for ${f.name}: ${e}`);
+        vscode.window.showWarningMessage(`Cartographer: Index failed for ${f.name} — check Output > Cartographer`);
+      }
       repoTree.refresh();
       entityTree.refresh();
       updateStatusBar();
@@ -176,6 +191,20 @@ export function activate(_ctx: vscode.ExtensionContext): void {
     if (indexed.length > 0) {
       ch.appendLine(`Already indexed: ${indexed.join(", ")}`);
     }
+    // Welcome: if still empty after auto-index attempt, nudge user
+    setTimeout(async () => {
+      try {
+        const all = await clients.allSummaries();
+        if (all.length === 0) {
+          const pick = await vscode.window.showInformationMessage(
+            "Cartographer: No repository indexed. Index now to enable graph, search, and AI tools.",
+            "Index Repository", "Open Graph", "Don't Show Again"
+          );
+          if (pick === "Index Repository") vscode.commands.executeCommand("cartographer.index");
+          else if (pick === "Open Graph") vscode.commands.executeCommand("cartographer.graph");
+        }
+      } catch { /* ignore */ }
+    }, 3500);
   })();
 
   // File watchers: per-folder incremental re-index via MCP
@@ -261,26 +290,42 @@ async function updateStatusBar(): Promise<void> {
         if (s) summaryCache.set(active.projectRoot, { summary: s, time: now });
       }
       if (s) {
+        const nodes = safeNum((s as any).total_nodes ?? (s as any).nodes);
+        const edges = safeNum((s as any).total_edges ?? (s as any).edges);
         const ws = vscode.workspace.workspaceFolders
-          ?.find(f => active.projectRoot.startsWith(f.uri.fsPath))?.name || s.name;
-        statusBar.text = `$(graph) ${ws}  ${s.total_nodes}N/${s.total_edges}E`;
-        statusBar.tooltip = `${s.name}: ${s.total_nodes} nodes, ${s.total_edges} edges`;
+          ?.find(f => active.projectRoot.startsWith(f.uri.fsPath))?.name || (s as any).name || "Cartographer";
+        statusBar.text = `$(graph) ${ws}  ${nodes}N/${edges}E`;
+        statusBar.tooltip = `${(s as any).name || ws}: ${nodes} nodes, ${edges} edges — click for summary`;
+        statusBar.backgroundColor = undefined;
+        return;
+      } else {
+        // Active folder has no index — show actionable state, not NaN
+        const ws = vscode.workspace.workspaceFolders?.find(f => active.projectRoot.startsWith(f.uri.fsPath))?.name || "No index";
+        statusBar.text = `$(graph) ${ws}  —  not indexed`;
+        statusBar.tooltip = `Cartographer: ${ws} not indexed — click to index`;
+        statusBar.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
         return;
       }
     }
     // Fallback: aggregate all folders
     const all = await clients.allSummaries();
     if (all.length > 0) {
-      const totalNodes = all.reduce((a, b) => a + b.nodes, 0);
-      const totalEdges = all.reduce((a, b) => a + b.edges, 0);
+      const totalNodes = all.reduce((a, b) => a + safeNum((b as any).nodes ?? (b as any).total_nodes), 0);
+      const totalEdges = all.reduce((a, b) => a + safeNum((b as any).edges ?? (b as any).total_edges), 0);
       const names = all.length === 1 ? all[0].name : `${all.length} repos`;
       statusBar.text = `$(graph) ${names}  ${totalNodes}N/${totalEdges}E`;
-      statusBar.tooltip = all.map(s => `${s.folder}: ${s.nodes}N/${s.edges}E`).join("\n");
+      statusBar.tooltip = all.map(s => `${s.folder}: ${safeNum(s.nodes)}N/${safeNum(s.edges)}E`).join("\n");
+      statusBar.backgroundColor = undefined;
     } else {
       statusBar.text = "$(graph) Cartographer";
-      statusBar.tooltip = "No repo indexed";
+      statusBar.tooltip = "No repo indexed — click to index";
+      statusBar.backgroundColor = undefined;
     }
-  } catch { statusBar.text = "$(graph) Cartographer"; }
+  } catch {
+    statusBar.text = "$(graph) Cartographer";
+    statusBar.tooltip = "Cartographer: click for summary — check Output > Cartographer for errors";
+    statusBar.backgroundColor = undefined;
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────

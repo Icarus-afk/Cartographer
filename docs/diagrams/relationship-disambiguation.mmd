@@ -1,0 +1,13 @@
+flowchart LR
+    A[auth/service.py\nUserService] -->|candidate 1| M[app/main.py\nMyService(UserService)]
+    B[legacy/service.py\nUserService] -.->|candidate 2| M
+    subgraph Rank["Pick Rank (new builder)"]
+        direction TB
+        R1[1. Same file] --> R2[2. Directly imported\nvia IMPORTS edge]
+        R2 --> R3[3. Longest common\ndirectory prefix]
+        R3 --> R4[4. Fallback targets[0]]
+    end
+    M -.->|import 'auth.service'| A
+    style A fill:#b7f5c2,stroke:#2a7,stroke-width:2px
+    style B fill:#ffd6d6,stroke:#a33,stroke-width:2px
+    style M fill:#d6e8ff,stroke:#36c,stroke-width:2px
