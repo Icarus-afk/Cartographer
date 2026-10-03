@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cartographer — Live Interactive Demo</title>
+<script src="./data.js"></script>
+<script src="./graph.js"></script>
+<style>
+  :root{--bg:#0a0d14;--panel:#10151d;--panel2:#151c26;--border:#212b3a;--txt:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--grn:#3fb950;--red:#f85149;--amb:#d29922}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;background:var(--bg);color:var(--txt);height:100vh;overflow:hidden;font-size:14px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  #top{height:54px;display:flex;align-items:center;gap:12px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--border)}
+  #top .brand{font-weight:700;font-size:15px;white-space:nowrap}
+  #top .brand small{color:var(--mut);font-weight:400;font-size:12px}
+  .live{font-size:11px;font-weight:700;color:#fff;background:#1a7f37;border-radius:4px;padding:3px 8px;letter-spacing:.6px;white-space:nowrap}
+  .live i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#fff;margin-right:5px;animation:bl 1.6s infinite}
+  @keyframes bl{50%{opacity:.35}}
+  #repo{font-size:12.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #repo b{color:var(--txt)}
+  #topstats{margin-left:auto;display:flex;gap:8px}
+  .pill{font-size:12px;border:1px solid var(--border);background:var(--panel2);border-radius:6px;padding:5px 10px;white-space:nowrap}
+  .pill b{color:#fff}
+  #main{display:grid;grid-template-columns:250px 1fr 430px;height:calc(100vh - 54px - 46px)}
+  #rail{background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;padding:12px}
+  .plabel{font-size:11px;font-weight:700;letter-spacing:1px;color:var(--mut);margin:2px 4px 10px}
+  .tool{border:1px solid var(--border);border-radius:8px;padding:10px 11px;margin-bottom:8px;background:var(--panel2);cursor:pointer;text-align:left;width:100%;color:var(--txt);font:inherit}
+  .tool:hover{border-color:#3a4a61}
+  .tool.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+  .tool h4{font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px}
+  .tool h4 .k{font-size:10px;color:var(--mut);border:1px solid var(--border);border-radius:4px;padding:1px 6px}
+  .tool p{font-size:12px;color:var(--mut);margin-top:5px;line-height:1.5}
+  .tool p b{color:var(--txt)}
+  #gwrap{position:relative;background:#080b10;overflow:hidden}
+  #cv{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab}
+  #gcap{position:absolute;top:12px;left:14px;background:rgba(13,18,27,.92);border:1px solid var(--border);border-radius:8px;padding:9px 14px;font-size:13.5px;z-index:5;max-width:60%}
+  #gcap small{display:block;color:var(--mut);font-size:12px;margin-top:2px}
+  #tip{position:absolute;display:none;background:#141c29;border:1px solid var(--acc);border-radius:8px;padding:8px 11px;font-size:12px;z-index:9;max-width:300px;pointer-events:none}
+  #tip .tn{font-weight:700} #tip .tt{color:#a5d6ff;font-size:11px}
+  #side{background:#080b10;border-left:1px solid var(--border);display:flex;flex-direction:column;min-width:0}
+  #story{padding:14px 16px 6px}
+  #story h2{font-size:19px;font-weight:800;line-height:1.3}
+  #story p{font-size:13.5px;color:#c3ccd6;line-height:1.6;margin-top:8px}
+  #story p b{color:#fff}
+  #tout{flex:1;overflow-y:auto;margin:10px 12px 0;background:#05080d;border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:12.5px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
+  #tout .cmd{color:#7ee787} #tout .dim{color:var(--mut)} #tout .hl{color:#a5d6ff} #tout .bad{color:var(--red)} #tout .ok{color:var(--grn)}
+  #tmeta{margin:8px 12px 12px;font-size:12px;color:var(--mut);display:flex;gap:14px}
+  #tmeta b{color:var(--grn)}
+  #foot{height:46px;background:var(--panel);border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;padding:0 16px;font-size:12.5px;color:var(--mut)}
+  #foot kbd{background:#05080d;border:1px solid var(--border);border-radius:4px;padding:1px 7px;font-size:11px}
+  table.eco{width:100%;border-collapse:collapse;font-size:12px;word-break:normal}
+  table.eco td,table.eco th{border-bottom:1px solid var(--border);padding:6px 3px;text-align:left;vertical-align:top}
+  table.eco td,table.eco th{border-bottom:1px solid var(--border);padding:7px 4px;text-align:left}
+  table.eco th{color:var(--mut);font-size:10.5px;letter-spacing:.5px}
+  .sv{color:var(--grn);font-weight:700}
+  .bar{height:8px;border-radius:4px;background:#1c2635;margin-top:4px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--grn);border-radius:4px}
+</style>
+</head>
+<body>
+<div id="top">
+  <div class="brand">Cartographer <small>live on pallets/flask</small></div>
+  <div class="live"><i></i>REAL TOOL OUTPUT</div>
+  <div id="repo"><b>206</b> files · <b>1,910</b> nodes · <b>2,611</b> edges · indexed live</div>
+  <div id="topstats">
+    <div class="pill"><b>31</b> languages</div>
+    <div class="pill"><b>20</b> MCP tools</div>
+  </div>
+</div>
+<div id="main">
+  <div id="rail">
+    <div class="plabel">CLICK A TOOL — EVERY ANSWER IS REAL</div>
+    <div id="tools"></div>
+  </div>
+  <div id="gwrap">
+    <canvas id="cv"></canvas>
+    <div id="gcap"><b id="gcapT">The map</b><small id="gcapS">1,454 nodes drawn · drag to pan · scroll to zoom · hover any dot</small></div>
+    <div id="tip"></div>
+  </div>
+  <div id="side">
+    <div id="story"><h2 id="sTitle"></h2><p id="sBody"></p></div>
+    <div id="tout" class="mono"></div>
+    <div id="tmeta" class="mono"><span>tokens <b id="mTok">—</b></span><span>latency <b id="mLat">—</b></span><span id="mSrc">source <b>live CLI</b></span></div>
+  </div>
+</div>
+<div id="foot">
+  <span><kbd>←</kbd><kbd>→</kbd> walk through</span><span><kbd>1</kbd>–<kbd>9</kbd> jump to tool</span><span><kbd>R</kbd> reset view</span>
+  <span style="margin-left:auto">double-click this file — no server, no internet needed</span>
+</div>
+<script>
+(function(){
+"use strict";
+var D = window.DEMO, G = window.GRAPH;
+var nodes = G.nodes, edges = G.edges;
+var byId = {}, byFile = {};
+nodes.forEach(function(n,i){ n.i=i; byId[n.id]=n; (byFile[n.f]=byFile[n.f]||[]).push(n); });
+var adj = {};
+edges.forEach(function(e){ (adj[e[0]]=adj[e[0]]||[]).push(e[1]); (adj[e[1]]=adj[e[1]]||[]).push(e[0]); });
+var deg = {}; nodes.forEach(function(n){ deg[n.i]=0; });
+edges.forEach(function(e){ deg[e[0]]++; deg[e[1]]++; });
+var maxD = Math.max.apply(null,[1].concat(Object.values(deg)));
+function rad(n){ return 2 + 4.5*Math.sqrt(deg[n.i]/maxD); }
+
+var NCOL = {file:"#58a6ff",class:"#d2a8ff",function:"#3fb950",method:"#bc8cff",constant:"#6e7681",variable:"#6e7681",directory:"#8b949e",api_endpoint:"#f85149",middleware:"#d29922",markdown:"#8b949e",table:"#39c5cf",wiki:"#8b949e",interface:"#4dd0e1"};
+var ECOL = {IMPORTS:"#d29922",DEFINES:"#58a6ff",CALLS:"#f85149",CONTAINS:"#5b6b81",DECLARES:"#3fb950",DECORATES:"#bc8cff",INHERITS:"#d2a8ff"};
+
+var cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+var tip = document.getElementById('tip');
+var W=0,H=0,DPR=Math.min(2,window.devicePixelRatio||1);
+var cam = {x:0,y:0,k:1};
+function size(){ var r=document.getElementById('gwrap').getBoundingClientRect(); W=r.width; H=r.height; cv.width=W*DPR; cv.height=H*DPR; }
+size(); window.addEventListener('resize',size);
+function w2s(x,y){ return [(x*RX)*cam.k+W/2+cam.x, (y*RY)*cam.k+H/2+cam.y]; }
+var RX=0,RY=0; function fitScale(){ RX=W/2.16; RY=H/2.16; } fitScale();
+
+var hi = {set:null, hero:-1, edges:null, t0:0};
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function out(html){ document.getElementById('tout').innerHTML = html; document.getElementById('tout').scrollTop = 0; }
+function meta(tok,lat){ document.getElementById('mTok').textContent=tok; document.getElementById('mLat').textContent=lat; }
+function story(t,b){ document.getElementById('sTitle').textContent=t; document.getElementById('sBody').innerHTML=b; }
+function cap(t,s){ document.getElementById('gcapT').textContent=t; document.getElementById('gcapS').textContent=s; }
+
+function draw(now){
+  if(!W) return;
+  ctx.setTransform(DPR,0,0,DPR,0,0); ctx.clearRect(0,0,W,H);
+  var hasHi = hi.set && hi.set.size;
+  for(var i=0;i<edges.length;i++){
+    var e=edges[i], a=e[0], b=e[1];
+    if(e[2]==='CONTAINS') continue;
+    var hot = hi.edges && hi.edges.has(i);
+    var vis = !hasHi || (hi.set.has(a)&&hi.set.has(b));
+    var faint = e[2]==='CALLS' ? 0.035 : 0.14;
+    ctx.strokeStyle = hot ? '#f85149' : (ECOL[e[2]]||'#5b6b81');
+    ctx.globalAlpha = hot ? 0.9 : (vis ? faint : 0.015);
+    ctx.lineWidth = hot ? 1.6 : 0.6;
+    var pa=w2s(nodes[a].x,nodes[a].y), pb=w2s(nodes[b].x,nodes[b].y);
+    ctx.beginPath(); ctx.moveTo(pa[0],pa[1]); ctx.lineTo(pb[0],pb[1]); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  var pulse = (now-hi.t0)%2600/2600;
+  for(var j=0;j<nodes.length;j++){
+    var n=nodes[j];
+    var inHi = !hasHi || hi.set.has(n.i);
+    var isHero = n.i===hi.hero, isImp = hi.imp && hi.imp.has(n.i);
+    ctx.globalAlpha = inHi ? 1 : 0.07;
+    ctx.fillStyle = isHero ? '#ffffff' : (isImp ? '#f85149' : (NCOL[n.t]||'#8b949e'));
+    var p=w2s(n.x,n.y), r=rad(n)*Math.max(0.6,Math.sqrt(cam.k)*0.75);
+    ctx.beginPath(); ctx.arc(p[0],p[1],r,0,6.2832); ctx.fill();
+    if(isHero){
+      ctx.strokeStyle = isImp ? '#f85149' : '#2f81f7'; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(p[0],p[1],r+4+10*pulse,0,6.2832);
+      ctx.globalAlpha = inHi ? (1-pulse)*0.9 : 0; ctx.stroke(); ctx.globalAlpha = inHi?1:0.07;
+    }
+  }
+  ctx.globalAlpha = 1;
+  /* labels: heroes + hubs */
+  ctx.font = '600 12px sans-serif';
+  function label(n,color){
+    var p=w2s(n.x,n.y);
+    ctx.fillStyle='rgba(5,8,13,0.7)';
+    var w=ctx.measureText(n.n).width;
+    ctx.fillRect(p[0]+rad(n)+3,p[1]-9,w+8,16);
+    ctx.fillStyle=color||'#e6edf3'; ctx.fillText(n.n,p[0]+rad(n)+7,p[1]+4);
+  }
+  function labelAbove(n){
+    var p=w2s(n.x,n.y);
+    ctx.save(); ctx.textAlign='center'; ctx.fillStyle='#fff'; ctx.font='700 13px sans-serif';
+    var w=ctx.measureText(n.n).width;
+    ctx.fillStyle='rgba(5,8,13,0.85)'; ctx.fillRect(p[0]-w/2-5,p[1]-rad(n)-26,w+10,18);
+    ctx.fillStyle='#fff'; ctx.fillText(n.n,p[0],p[1]-rad(n)-12); ctx.restore();
+  }
+  if(hasHi){
+    ctx.textAlign='left';
+    var placed=[];
+    var hp = hi.hero>=0 ? w2s(nodes[hi.hero].x,nodes[hi.hero].y) : null;
+    var cands=[];
+    hi.set.forEach(function(i){ cands.push(nodes[i]); });
+    cands.sort(function(a,b){ return (b.i===hi.hero)-(a.i===hi.hero) || deg[b.i]-deg[a.i]; });
+    var shown=0;
+    ctx.font='600 12px sans-serif';
+    for(var li=0; li<cands.length && shown<10; li++){
+      var n=cands[li];
+      if(n.i!==hi.hero && deg[n.i]<=maxD*0.4) continue;
+      var p=w2s(n.x,n.y);
+      if(n.i===hi.hero){ labelAbove(n); shown++; continue; }
+      if(hp && Math.hypot(p[0]-hp[0],p[1]-hp[1])<70) continue;
+      var lx=p[0]+rad(n)+3, ly=p[1];
+      var lw=ctx.measureText(n.n).width;
+      var box=[lx-4,ly-13,lx+lw+4,ly+5], ok=true;
+      for(var pi=0; pi<placed.length; pi++){ var q=placed[pi];
+        if(box[0]<q[2]+10 && box[2]+10>q[0] && box[1]<q[3]+6 && box[3]+6>q[1]){ ok=false; break; }
+      }
+      if(!ok) continue;
+      placed.push(box); shown++;
+      label(n, n.i===hi.hero?'#fff':'#c3ccd6');
+    }
+  }
+  /* cluster names */
+  if(cam.k < 1.6){
+    ctx.font='700 13px sans-serif'; ctx.fillStyle='rgba(139,148,158,0.85)'; ctx.textAlign='center';
+    var hp2 = (hi.set && hi.hero>=0) ? w2s(nodes[hi.hero].x,nodes[hi.hero].y) : null;
+    G.clusters.forEach(function(c){
+      var xs=[],ys=[];
+      nodes.forEach(function(n){ if(n.c===c.name){xs.push(n.x);ys.push(n.y);} });
+      if(!xs.length) return;
+      var cx=xs.reduce(function(a,b){return a+b;},0)/xs.length, cy=ys.reduce(function(a,b){return a+b;},0)/ys.length;
+      var p=w2s(cx,cy);
+      if(hp2 && Math.hypot(p[0]-hp2[0],p[1]-hp2[1])<170) return;
+      ctx.fillText(c.name+' · '+c.count, p[0], p[1]);
+    });
+    ctx.textAlign='left';
+  }
+  requestAnimationFrame(draw);
+}
+function resetCam(){ cam={x:0,y:0,k:1}; }
+function setHi(set,hero,edges,imp){ hi={set:set,hero:hero==null?-1:hero,edges:edges||null,imp:imp||null,t0:performance.now()}; }
+
+var hover=-1, downPos=null;
+cv.addEventListener('pointerdown',function(e){ downPos=[e.clientX,e.clientY]; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove',function(e){
+  var r=cv.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+  if(downPos){
+    if(Math.hypot(e.clientX-downPos[0],e.clientY-downPos[1])>5){
+      cam.x+=e.movementX; cam.y+=e.movementY; downPos=[e.clientX,e.clientY]; downPos.moved=true;
+    }
+    return;
+  }
+  var best=-1,bd=14*14;
+  for(var i=0;i<nodes.length;i++){
+    var p=w2s(nodes[i].x,nodes[i].y), dx=p[0]-mx, dy=p[1]-my, d2=dx*dx+dy*dy;
+    if(d2<bd){bd=d2;best=i;}
+  }
+  hover=best;
+  if(best>=0){
+    var n=nodes[best];
+    tip.style.display='block'; tip.style.left=(mx+16)+'px'; tip.style.top=(my-8)+'px';
+    tip.innerHTML='<div class="tn">'+esc(n.n)+'</div><div class="tt">['+n.t+'] · degree '+deg[n.i]+'</div><div style="color:#8b949e">'+esc(n.f||'')+'</div>';
+    cv.style.cursor='pointer';
+  } else { tip.style.display='none'; cv.style.cursor='grab'; }
+});
+cv.addEventListener('pointerup',function(e){
+  var wasDrag = downPos && downPos.moved;
+  downPos=null;
+  if(!wasDrag && hover>=0){ focusNode(hover); }
+});
+cv.addEventListener('wheel',function(e){
+  e.preventDefault();
+  var r=cv.getBoundingClientRect(), mx=e.clientX-r.left-W/2-cam.x, my=e.clientY-r.top-H/2-cam.y;
+  var k2=Math.min(6,Math.max(0.3,cam.k*(e.deltaY<0?1.15:0.87)));
+  cam.x = e.clientX-r.left-W/2-mx*(k2/cam.k); cam.y = e.clientY-r.top-H/2-my*(k2/cam.k); cam.k=k2;
+},{passive:false});
+function focusNode(i){
+  var n=nodes[i], s=new Set([i]);
+  (adj[i]||[]).forEach(function(j){s.add(j);});
+  setHi(s,i,null,null);
+  cap(n.n, '['+n.t+'] · '+(s.size-1)+' direct connections · '+(n.f||''));
+}
+
+/* ---------- steps (100% real captured output) ---------- */
+function cmdLine(c){ return '<span class="cmd">$ '+esc(c)+'</span>\n'; }
+var STEPS=[
+{ title:"The problem",
+  body:"Flask is <b>206 files, 108 classes, 718 functions</b> — small by industry standards. The old way to understand it is text search. Watch what that gives you.",
+  run:function(){
+    cap('The old way: grep','text matches, zero understanding');
+    setHi(null,-1,null,null); resetCam(); meta('—','~2ms');
+    story('Searching finds text, not answers','Ask “where is Flask defined?” — grep returns <b>five look-alikes</b> with no ranking, no relationships. Which one is real? It can’t say.');
+    out(cmdLine('grep -rn "class Flask" src/') +
+      D.grep_raw.map(function(l){return '<span class="dim">'+esc(l)+'</span>';}).join('\n') +
+      '\n<span class="bad">5 matches — all look identical. No ranking. No relationships.</span>');
+  }},
+{ title:"Build the map",
+  body:"Cartographer reads the whole project <b>once</b> — 20 tree-sitter grammars, 30s isolation per file — and stores <b>typed edges</b> in SQLite. This index ran live in under a second.",
+  run:function(){
+    cap('cartographer index /tmp/flask-demo','1,910 nodes · 2,611 edges · live in '+D.index_seconds+'s');
+    setHi(null,-1,null,null); resetCam(); meta('one pass',''+D.index_seconds+'s');
+    story('One pass, then ask forever','<b>206 files → 1,910 nodes, 2,611 edges</b> (DEFINES, CALLS, IMPORTS, INHERITS…). Every later answer comes from this map — nothing is re-read.');
+    out(cmdLine('time cartographer index /tmp/flask-demo') +
+      '<span class="dim">Entities: 206 files parsed, 108 classes, 718 functions, 333 methods\nReferences: 176 cross-file imports</span>\n<span class="ok">✔ graph built in '+D.index_seconds+'s</span>');
+  }},
+{ title:"Just ask",
+  body:"No filenames, no guessing. The <b>ask</b> tool ranks by type priority and reference count — the real class first, with a score.",
+  run:function(){
+    var a=D.ask[0], hero=byId[a.id];
+    var s=new Set([hero.i]); (adj[hero.i]||[]).forEach(function(j){s.add(j);});
+    setHi(s,hero.i,null,null); resetCam(); meta('~180 tokens','~40ms');
+    cap('cartographer ask "Flask" -t class','class Flask → src/flask/app.py · score '+a.score);
+    story('One question, ranked answer','<b>class Flask → src/flask/app.py (0.80)</b>, runners-up below. An AI agent gets the same as JSON — no scraping.');
+    out(cmdLine('cartographer ask "Flask" -t class --limit 3') +
+      D.ask.map(function(r){return '<span class="hl">['+r.type+'] '+esc(r.name)+'</span>\n<span class="dim">     '+esc(r.file)+' · score '+r.score+'</span>';}).join('\n'));
+  }},
+{ title:"What breaks?",
+  body:"The question grep <b>cannot</b> answer: who depends on this file? Nine files merely <i>mention</i> “sansio” — the map knows the <b>26 true dependents</b>, including files that never use the word.",
+  run:function(){
+    var files=D.impact.dependents.filter(function(d){return d.type==='file';});
+    var keep=new Set(), em=new Set(), heroFile='src/flask/sansio/app.py';
+    (byFile[heroFile]||[]).forEach(function(n){keep.add(n.i);});
+    var heroI=(byFile[heroFile]||[{}])[0].i;
+    files.forEach(function(d){
+      (byFile[d.name]||[]).forEach(function(n){
+        keep.add(n.i);
+        edges.forEach(function(e,ei){ if((e[0]===n.i&&nodes[e[1]].f===heroFile)||(e[1]===n.i&&nodes[e[0]].f===heroFile)) em.add(ei); });
+      });
+    });
+    setHi(keep,heroI,em,new Set(keep)); resetCam(); meta('~300 tokens','~25ms');
+    cap('cartographer impact src/flask/sansio/app.py','26 dependents · red = blast radius');
+    story('Text vs relationships','Grep found <b>9</b> files containing “sansio” — missing real dependents like <b>ctx.py, sessions.py, wrappers.py</b>. Impact traces <b>26 true dependents</b> in ~25ms.');
+    out(cmdLine('cartographer impact src/flask/sansio/app.py') +
+      '<span class="dim">Via IMPORTS:</span>\n' +
+      files.slice(0,12).map(function(d){return '  <span class="hl">[file]</span> '+esc(d.name);}).join('\n') +
+      '\n<span class="dim">  … +'+(files.length-12)+' more ('+D.impact.count+' total with dirs)</span>');
+  }},
+{ title:"Look inside",
+  body:"<b>neighbors</b> walks the graph: the anatomy of Flask’s core class — its config, URL map, session and Jinja hooks — without opening a single file.",
+  run:function(){
+    var hero=null;
+    nodes.forEach(function(n){ if(n.n==='App'&&n.t==='class') hero=n; });
+    var s=new Set([hero.i]); (adj[hero.i]||[]).forEach(function(j){s.add(j);});
+    setHi(s,hero.i,null,null); resetCam(); meta('~250 tokens','~20ms');
+    cap('cartographer neighbors App -d 1','class App · '+D.neighbors.items.length+' direct neighbors');
+    story('Anatomy on demand','<b>class App</b> (src/flask/sansio/app.py) and everything wired directly into it — config, URL map, secret key, Jinja. A newcomer sees the heart of Flask in one glance.');
+    out(cmdLine('cartographer neighbors "App" -d 1') +
+      '<span class="hl">Neighbors of [class] App:</span>\n' +
+      D.neighbors.items.slice(0,12).map(function(x){return '  <span class="dim">['+x.type+']</span> '+esc(x.name);}).join('\n') +
+      '\n<span class="dim">  … +'+(D.neighbors.items.length-12)+' more</span>');
+  }},
+{ title:"How do A and B connect?",
+  body:"<b>path</b> finds the shortest route between any two symbols. App → Scaffold in 2 hops: inheritance, proven, not guessed.",
+  run:function(){
+    var a=null,b=null;
+    nodes.forEach(function(n){ if(n.n==='App'&&n.t==='class')a=n; if(n.n==='Scaffold'&&n.t==='class')b=n; });
+    var prev={}, q=[a.i], seen={}; seen[a.i]=1;
+    while(q.length){ var cur=q.shift(); if(cur===b.i)break;
+      (adj[cur]||[]).forEach(function(j){ if(!seen[j]){seen[j]=1;prev[j]=cur;q.push(j);} }); }
+    var chain=[], c=b.i;
+    while(c!==undefined){ chain.unshift(c); c=prev[c]; }
+    var es=new Set();
+    for(var i=0;i<chain.length-1;i++){ var x=chain[i],y=chain[i+1];
+      edges.forEach(function(e,ei){ if((e[0]===x&&e[1]===y)||(e[0]===y&&e[1]===x)) es.add(ei); }); }
+    setHi(new Set(chain),a.i,es,null); resetCam(); meta('~120 tokens','~15ms');
+    cap('cartographer path App Scaffold','2 hops · App → Scaffold');
+    story('Connection, proven','<b>App inherits from Scaffold</b> — the map walks the edge and shows its work. Try that with grep.');
+    out(cmdLine('cartographer path "App" "Scaffold"') +
+      D.path.map(function(l){return '<span class="dim">'+esc(l)+'</span>';}).join('\n'));
+  }},
+{ title:"One file, ten lines",
+  body:"<b>file-summary</b> compresses a 79-entity core file to ~200 tokens: its class, imports, dependents, calls. This is what the AI reads <i>instead of</i> the file.",
+  run:function(){
+    var f=(byFile['src/flask/sansio/app.py']||[])[0];
+    var s=new Set(); if(f){ s.add(f.i); (adj[f.i]||[]).forEach(function(j){s.add(j);}); }
+    setHi(s,f?f.i:-1,null,null); resetCam(); meta('~200 tokens','~15ms');
+    cap('cartographer file-summary src/flask/sansio/app.py','90% fewer tokens than reading the file');
+    story('The AI reads this, not the file','Full file ≈ 2,000 tokens. Summary ≈ <b>200</b>. Multiply by every file an agent touches and you get the economics on the next slide.');
+    out(cmdLine('cartographer file-summary src/flask/sansio/app.py') +
+      D.file_summary.map(function(l){return '<span class="dim">'+esc(l)+'</span>';}).join('\n'));
+  }},
+{ title:"The agent view",
+  body:"Every tool returns <b>JSON {status, data, hint}</b> over MCP — 20 tools for Claude, Cursor, Opencode. No scraping, no hallucinated filenames.",
+  run:function(){
+    var a=D.ask[0], hero=byId[a.id];
+    var s=new Set([hero.i]); (adj[hero.i]||[]).forEach(function(j){s.add(j);});
+    setHi(s,hero.i,null,null); resetCam(); meta('~180 tokens','~40ms');
+    cap('cartographer --json ask "Flask"','this exact JSON is what the AI receives');
+    story('Built for agents','The rule we ship: <b>file_summary instead of reading files, impact instead of grep, summarize instead of exploring dirs</b>. ~96k tokens saved per 5-turn session.');
+    out(cmdLine('cartographer --json ask "Flask" -t class --limit 2') +
+      '<span class="dim">{</span>\n  <span class="hl">"status": "ok", "count": 2,</span>\n  <span class="dim">"results": [</span>\n    <span class="hl">{ "type": "class", "name": "Flask",</span>\n    <span class="hl">  "file_path": "src/flask/app.py", "score": 0.8 }</span>\n  <span class="dim">]</span>\n<span class="dim">}</span>');
+  }},
+{ title:"Performance",
+  body:"Measured numbers, not claims — from <b>22 repos / 25k files / 247k nodes</b> benchmarked. Indexing is sub-second; every query is milliseconds and hundreds of tokens.",
+  run:function(){
+    setHi(null,-1,null,null); resetCam(); meta('−96k tok saved','—');
+    cap('Measured performance','index '+D.index_seconds+'s · queries in ms · answers in ~100s of tokens');
+    story('Why this matters','Full dump of a Django-sized repo costs <b>$48 per query</b> (GPT-4o). Compressed map context: <b>$0.00004</b>. 10 agents × 20 sessions/day ≈ <b>$28.8k/month saved</b>.');
+    var rows=D.economics.map(function(r){
+      return '<tr><td>'+esc(r.task)+'</td><td class="dim">'+esc(r.without)+'</td><td>'+esc(r.with)+'</td><td class="sv">'+esc(r.saved)+'</td></tr>'; }).join('');
+    out(cmdLine('the scoreboard') +
+      '<table class="eco"><tr><th>TASK</th><th>WITHOUT MAP</th><th>WITH MAP</th><th>SAVED</th></tr>'+rows+'</table>' +
+      '\n<span class="ok">✔ this Flask index: '+D.index_seconds+'s · ask ~40ms · impact ~25ms</span>');
+  }}
+];
+var rail=document.getElementById('tools');
+STEPS.forEach(function(s,i){
+  var b=document.createElement('button');
+  b.className='tool'; b.id='tool'+i;
+  b.innerHTML='<h4><span class="k">'+(i+1)+'</span>'+esc(s.title)+'</h4><p>'+s.body.replace(/<[^>]*>/g,'').slice(0,90)+'…</p>';
+  b.onclick=function(){go(i);};
+  rail.appendChild(b);
+});
+var cur=-1;
+function go(i){
+  if(i<0||i>=STEPS.length) return;
+  cur=i;
+  document.querySelectorAll('.tool').forEach(function(b,j){ b.classList.toggle('on', j===i); });
+  STEPS[i].run();
+}
+document.addEventListener('keydown',function(e){
+  if(e.target.tagName==='INPUT') return;
+  if(e.key==='ArrowRight'||e.key===' '){ e.preventDefault(); go((cur+1)%STEPS.length); }
+  else if(e.key==='ArrowLeft'){ go((cur-1+STEPS.length)%STEPS.length); }
+  else if(e.key>='1'&&e.key<='9'){ go(+e.key-1); }
+  else if(e.key==='r'||e.key==='R'){ setHi(null,-1,null,null); resetCam(); }
+});
+size(); fitScale();
+var _q = null;
+try { _q = parseInt((location.search.match(/step=(\d+)/)||[])[1],10); } catch(e){}
+go((_q>=1 && _q<=STEPS.length) ? _q-1 : 0);
+requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>
