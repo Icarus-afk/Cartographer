@@ -517,11 +517,18 @@ def update_file_in_graph(
     if parent_id is not None:
         _batch_edge(parent_id, file_id, "CONTAINS")
 
+    file_stats: dict[str, int] = {"nodes": 0, "edges": 0}
     for entity in parsed_file.entities:
-        _process_entity(entity, {}, file_id, file_path, _batch_node, _batch_edge)
+        _process_entity(entity, file_stats, file_id, file_path, _batch_node, _batch_edge)
 
-    # Resolve relationships within the file
-    _resolve_entity_relationships(parsed_file.entities, name_to_entity_ids, {}, _batch_edge)
+    name_to_entries: dict[str, list[tuple[int, str]]] = defaultdict(list)
+    entity_key_to_id: dict[tuple[str, str], int] = {}
+    for nid, _rid, _kind, name, fpath, _meta in node_rows:
+        name_to_entries[name].append((nid, fpath))
+        entity_key_to_id[(name, fpath)] = nid
+    _resolve_entity_relationships(
+        parsed_file.entities, file_path, name_to_entries, entity_key_to_id, {}, file_stats, _batch_edge,
+    )
 
     if node_rows:
         conn.executemany(

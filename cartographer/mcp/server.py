@@ -52,6 +52,9 @@ def _db(db_str: str | None) -> Path:
         return Path(db_str)
     if _CUSTOM_DB_PATH is not None:
         return _CUSTOM_DB_PATH
+    import os as _os
+    if _os.environ.get("CARTOGRAPHER_DB"):
+        return Path(_os.environ["CARTOGRAPHER_DB"])
     # Per-project config like CLI: .cartographer/config.json in CWD
     try:
         cfg_path = Path.cwd() / ".cartographer" / "config.json"
@@ -65,10 +68,6 @@ def _db(db_str: str | None) -> Path:
             return Path.cwd() / ".cartographer" / "data.db"
     except Exception:
         pass
-    # also check CARTOGRAPHER_DB env
-    import os as _os
-    if _os.environ.get("CARTOGRAPHER_DB"):
-        return Path(_os.environ["CARTOGRAPHER_DB"])
     return DEFAULT_DB
 
 

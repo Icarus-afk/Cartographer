@@ -1619,7 +1619,7 @@ def update_index(ctx, file_path):
     """
     from cartographer.ingestion.engine import update_index as _update_index
     result = _update_index(file_path, db_path=ctx.obj["db_path"])
-    click.echo(json.dumps(result))
+    click.echo(_json.dumps(result))
 
 
 # ── delete-file command ─────────────────────────────────────────────────────
