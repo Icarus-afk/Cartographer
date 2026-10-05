@@ -1,4 +1,4 @@
-.PHONY: install install-dev install-full setup lint test test-verbose clean build
+.PHONY: install install-dev install-full setup lint test test-verbose clean build vscode-compile vscode-package
 
 install:
 	pip install -e .
@@ -33,5 +33,11 @@ clean:
 build:
 	pip install build
 	python -m build
+
+vscode-compile:
+	cd editors/vscode && npm run compile
+
+vscode-package:
+	cd editors/vscode && npx vsce package
 
 all: install lint test
