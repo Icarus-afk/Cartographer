@@ -42,6 +42,10 @@ Languages: `python (.py)`, `javascript (.js/.jsx/.mjs/.cjs)`, `typescript (.ts)`
 
 `update_file_in_graph`/`delete_file_from_graph` — incremental, `_ensure_dir_path_nodes`.
 
+## Graph Sampling (`graph-data`, `graph/paging.py`)
+
+The VS Code graph never dumps whole repos. `graph-data` ranks nodes by degree, takes `hub_count = max(5, limit//8)` seeds from `offset`, pulls 1-hop neighbours up to `limit`, backfills by degree, and returns edges internal to the sampled set. Every page carries `next_offset` (= `offset + hub_count`) and `has_more` (= more hub seeds remain) — clients must page with the cursor because `offset` counts hub seeds, not nodes. `--expand-node-id` bypasses sampling and returns one ego network. Same logic in `cli.py graph_data` and `mcp/server.py graph_data` (+ `_graph_hub_nodes`/`_graph_expand_node`); page size lives in `graph/paging.py` so both stay in sync.
+
 ## Embeddings (`embedding/engine.py`)
 
 `EMBEDDING_MODEL bge-small-en-v1.5` / `384` / `256` / `0`. `_get_model` 3× retry + backoff `2^attempt`. `_build_node_text` includes `node_type:name`, `file`, `directory`, `docstring` (500), `signature`, `parameters` (10), `returns`, `decorators` (200), `bases` (5), `parent/module`, `language`.

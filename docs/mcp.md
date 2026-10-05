@@ -4,21 +4,27 @@ Cartographer is MCP-first (model context protocol). `cartographer-mcp` (stdio) e
 
 ## Setup
 
-**Opencode** (`opencode.json` already ships):
+Preferred — writes all agent configs + installs the VS Code extension (idempotent merge, existing keys preserved):
+
+```bash
+cartographer setup --scope global   # opencode global, Claude Desktop, Cursor, Windsurf
+cartographer setup --scope project  # opencode.json, .vscode/mcp.json, .roo/mcp.json
+cartographer setup --check          # verify without writing
+```
+
+**Manual — Opencode** (`opencode.json`):
 
 ```json
 { "mcp": { "cartographer": { "type": "local", "command": ["cartographer-mcp"], "enabled": true } } }
 ```
 
-**Claude Desktop** (`claude_desktop_config.json`):
+**Manual — Claude Desktop** (`claude_desktop_config.json`), **Cursor** (`~/.cursor/mcp.json`), **Windsurf** (`~/.codeium/windsurf/mcp_config.json`):
 
 ```json
 { "mcpServers": { "cartographer": { "command": "cartographer-mcp", "args": [] } } }
 ```
 
-**Cursor** (same as Claude).
-
-**Manual:**
+**Manual — server:**
 
 ```bash
 cartographer mcp start --verbose
@@ -64,7 +70,7 @@ Always prefer `file_summary` over raw `read_file` — saves ~96k tokens / 5-turn
 | `architecture` | `repo?, detect=false, db?` | `{repository,frameworks,layers,patterns,dependency_flow}` | Layers/patterns |
 | `similar` | `target*, repo?, limit 1-100, db?` | `{target,count,results:[{type,name,similarity}]}` | Semantic (needs `embed`) |
 | `ask` | `query*, repo?, limit 1-100, max_tokens 0, db?` | `{"answer":string}` (intent: search/explain/impact/path/…) | NL questions |
-| `graph_data` | `repo?, limit 1-500, offset 0, dir?, expand_node_id?, db?` | `{total_nodes,total_edges,nodes[],edges[],directories[]}` | Viz |
+| `graph_data` | `repo?, limit 1-500, offset 0 (hub-seed cursor), dir?, expand_node_id?, db?` | `{total_nodes,total_edges,next_offset,has_more,nodes[],edges[],directories[]}` | Viz (page with `next_offset` while `has_more`) |
 | `context` | `repo?, top_n 1-50, max_tokens 200-8000, db?` | `{human, data:{summary,architecture,top_nodes}}` | One-call overview for LLM |
 | `update_index` | `file_path*, db?` | `{nodes_added,nodes_removed,edges_added,file,language}` | After edit |
 | `delete_file` | `file_path*, db?` | `{file,nodes_removed,embeddings_generated}` | After delete |
@@ -84,7 +90,7 @@ Per-tool validation (`_clamp`), `tryJson` handling in VS Code (`editors/vscode/s
 
 ## VS Code Extension (MCP-first)
 
-`ClientManager` per workspace folder → `McpClient.start("cartographer","mcp","start","--db",dbPath)` with `30s` tool timeout. Fallback `exec(["ask",...])` → parse JSON or human. Features: D3 graph (`graph_data` with `limit/offset/dir/expand`), incremental watch (batched 2s `update_index/delete_file`), multi-root, hover `300ms` + `60s` cache.
+`ClientManager` per workspace folder → `McpClient.start("cartographer","mcp","start","--db",dbPath)` with `30s` tool timeout. Fallback `exec(["ask",...])` → parse JSON or human. Features: D3 graph (`graph_data` cursor pagination via `next_offset`/`has_more`, `dir` filter, expand, type-filter chips, details panel with inline impact, focus mode, pauseable layout), incremental watch (batched 2s `update_index/delete_file`), multi-root, hover `300ms` + `60s` cache.
 
 ## CLI ↔ MCP parity
 

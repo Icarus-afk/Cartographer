@@ -22,7 +22,7 @@
   <a href="https://github.com/Icarus-afk/Cartographer"><img src="https://img.shields.io/github/stars/Icarus-afk/Cartographer?style=social" alt="Stars"></a>
   <img src="https://img.shields.io/badge/languages-31-yellow.svg" alt="31 Languages">
   <img src="https://img.shields.io/badge/MCP-20%20tools-orange.svg" alt="20 MCP Tools">
-  <img src="https://img.shields.io/badge/tests-84%20passed-brightgreen.svg" alt="84 Tests">
+  <img src="https://img.shields.io/badge/tests-90%20passed-brightgreen.svg" alt="90 Tests">
   <img src="https://img.shields.io/badge/embeddings-bge--small--en--v1.5%20%E2%80%A2%20384d%20%E2%80%A2%20hybrid-purple.svg" alt="Hybrid Embeddings">
   <img src="https://img.shields.io/badge/robust-%E2%80%94%20timeouts%20%E2%80%A2%20chunked%20%E2%80%A2%20retries-red.svg" alt="Robust">
 </p>
@@ -44,6 +44,21 @@
 
 ## Installation
 
+One command — python package + VS Code/Cursor extension + MCP configs for all agents:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Icarus-afk/Cartographer/main/install.sh | bash
+```
+
+Per-project (inside any repo):
+
+```bash
+cartographer setup --with-index   # MCP configs + VS Code extension + index
+cartographer setup --check        # verify without writing
+```
+
+Manual install:
+
 ```bash
 git clone https://github.com/Icarus-afk/Cartographer.git
 cd Cartographer
@@ -58,10 +73,9 @@ cartographer status              # health + indexing check
 **VS Code:**
 
 ```bash
-cd editors/vscode
-npm install && npm run compile
-npx vsce package
-code --install-extension cartographer-0.1.0.vsix
+make vscode-compile   # or: cd editors/vscode && npm install && npm run compile
+make vscode-package   # or: cd editors/vscode && npx vsce package
+code --install-extension editors/vscode/cartographer-0.1.0.vsix
 ```
 
 ---
@@ -116,6 +130,7 @@ Global flags (before subcommand): `--db PATH` (`$CARTOGRAPHER_DB`), `--json`, `-
 | Command | What it does | Example |
 |---|---|---|
 | `status` / `doctor` / `health` | DB + indexing + health (`tree_sitter/fastembed/mcp`, 31 langs) | `cartographer --json status` |
+| `setup [path] [--scope project\|global\|all]` | Full-suite setup: MCP configs (opencode/Claude/Cursor/Windsurf/VSCode/Roo) + VS Code extension | `cartographer setup --with-index` |
 | `init [path] [--force]` | Init project DB + index | `cartographer init .` |
 | `index [path]` | Index repo (idempotent) → `{files, languages, frameworks}` | `cartographer --json index /path` |
 | `ask <query> [-t type] [-r repo] [-l 1-100] [-s]` | Keyword search (use `query` for NL) | `cartographer ask "UserService" -t class` |
@@ -129,7 +144,7 @@ Global flags (before subcommand): `--db PATH` (`$CARTOGRAPHER_DB`), `--json`, `-
 | `embed [-r repo]` | Generate `bge-small-en-v1.5` 384-d embeddings (chunked 500, retry, valid-blob filter) | `cartographer embed` |
 | `similar <target> [-r repo] [-l 1-100]` | Hybrid semantic search (cosine + keyword boost) | `cartographer similar "auth middleware"` |
 | `file-summary <path> [-r repo]` | ~200-token file summary vs 2000 | `cartographer file-summary src/main.py` |
-| `graph-data [-r repo] [-l 80] [-o offset] [-d dir] [--expand-node-id N]` | JSON for graph viz | `cartographer graph-data --dir src/` |
+| `graph-data [-r repo] [-l 80] [-o offset] [-d dir] [--expand-node-id N]` | JSON for graph viz (paged: follow `next_offset` while `has_more`) | `cartographer graph-data --dir src/` |
 | `watch [path] [-v]` | Incremental `update_index/delete_file` on change (all 31 langs) | `cartographer watch .` |
 | `update-index <file>` | Re-parse single file + re-embed | `cartographer update-index src/main.py` |
 | `delete-file <file>` | Remove file nodes + re-embed | `cartographer delete-file src/old.py` |
@@ -152,9 +167,9 @@ Global flags (before subcommand): `--db PATH` (`$CARTOGRAPHER_DB`), `--json`, `-
 > 3) `impact/neighbors/path` for deps  
 > 4) `architecture/similar/graph_data` for structure/semantics
 
-**Tools (20):** `status, doctor, health, list_repos, ensure_indexed, search, impact, neighbors, path, summarize, architecture, similar, ask, graph_data, index, context, update_index, delete_file, db_info, file_summary` + resources `cartographer://repos` / `cartographer://repo/{name}` / `cartographer://node/{id}`.
+**Tools (20):** `status, doctor, health, list_repos, ensure_indexed, search, impact, neighbors, path, summarize, architecture, similar, ask, graph_data, index, context, update_index, delete_file, db_info, file_summary` + resources `cartographer://repos` / `cartographer://repo/{name}` / `cartographer://node/{node_id}`.
 
-Each has rich description with params, return shape, example, and `hint` on empty/error. `search`/`similar` clamp `limit 1-100`, `neighbors` `depth 1-5`, `path` `max_depth 1-10`, `graph_data` `limit 1-500`. Per-project DB detection mirrors CLI (`.cartographer/config.json` + `$CARTOGRAPHER_DB`).
+Each has rich description with params, return shape, example, and `hint` on empty/error. `search`/`similar` clamp `limit 1-100`, `neighbors` `depth 1-5`, `path` `max_depth 1-10`, `graph_data` `limit 1-500` with `offset` hub-seed cursor (follow `next_offset` while `has_more`). Per-project DB detection mirrors CLI (`.cartographer/config.json` + `$CARTOGRAPHER_DB`).
 
 **Opencode / Claude Desktop:**
 
@@ -220,11 +235,11 @@ discover_files (.gitignore + .cartographerignore, 10MiB skip, symlink loop guard
 
 `editors/vscode` — MCP-first (`ClientManager` per workspace folder) + CLI fallback, `cartographer.dbPath/binPath/maxResults/autoReindex/graphLimit/mcpEnabled`.
 
-Features: D3 graph (pagination `offset`, `dir` filter, expand, zoom `0.05x-15x`), incremental watch (batched 2s, `update_index/delete_file`), multi-root, per-project `.cartographer/config.json` live-reload, entity browser, hover (`300ms` debounce + 60s cache), status bar `graph N/E`.
+Graph: D3 with cursor-based Load More (follow `next_offset` while `has_more`), `dir` filter, expand-on-double-click, node/edge-type filter chips, click-for-details panel (Open/Expand/Focus/Impact), zoom controls + minimap + zoom-to-fit, pauseable layout, SVG export. Plus incremental watch (batched 2s, `update_index/delete_file`), multi-root, per-project `.cartographer/config.json` live-reload, entity browser, hover (`300ms` debounce + 60s cache), status bar `graph N/E`.
 
-Commands (`Ctrl+Shift+C`): `Index`, `Graph`, `Search`, `Ask`, `Watch`, `DB Info`, `Context`, `File Summary` + `Summarize`, `Architecture`, `Impact`, `Neighbors`, `Path`, `Similar`, `Embed`, `Git Index`, `Select DB`, `Refresh`.
+21 commands (`Ctrl+Shift+C`): `Index`, `Graph`, `Search`, `Ask`, `Watch`, `DB Info`, `Context`, `File Summary` + `Summarize`, `Architecture`, `Impact`, `Neighbors`, `Path`, `Similar`, `Embed`, `Git Index`, `Select DB`, `Refresh`.
 
-`npm install && npm run compile` / `npx vsce package`.
+`make vscode-compile` / `make vscode-package` (or `cd editors/vscode && npm install && npm run compile` / `npx vsce package`).
 
 ---
 
@@ -255,7 +270,7 @@ Resolution: `--db` > `$CARTOGRAPHER_DB` > `.cartographer/config.json` `dbPath` >
 | `CARTOGRAPHER_EMBEDDING_BATCH_SIZE` | `256` | Batch |
 | `CARTOGRAPHER_EMBEDDING_PARALLELISM` | `0` | `0`=auto |
 
-**`make`:** `lint` (`ruff`), `test` (`pytest -v`, 84 tests).
+**`make`:** `lint` (`ruff`), `test` (`pytest -v`, 90 tests), `install-full` (`./install.sh`), `setup` (`cartographer setup`), `vscode-compile` / `vscode-package`.
 
 ---
 
@@ -266,7 +281,7 @@ pip install -e ".[dev,watch]"
 make lint && make test
 ```
 
-Structure: `cartographer/ingestion`, `parser/{base,registry,languages/*.py}`, `graph/builder`, `storage/connection`, `embedding/engine`, `retrieval/{searcher,traversal,summarizer}`, `architecture/engine`, `git/engine`, `query/engine`, `compression/engine`, `cli.py`, `mcp/server.py`.
+Structure: `cartographer/ingestion`, `parser/{base,registry,languages/*.py}`, `graph/{builder,paging}`, `storage/connection`, `embedding/engine`, `retrieval/{searcher,traversal,summarizer}`, `architecture/engine`, `git/engine`, `query/engine`, `compression/engine`, `setup/engine`, `cli.py`, `mcp/server.py`.
 
 Add a language:
 

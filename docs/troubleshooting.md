@@ -18,7 +18,7 @@ Shows `db_path, size, counts, repositories[], health[tree_sitter/fastembed/mcp],
 cartographer --json ask "MyClass"  # {"status":"empty","hint":"Try broader query"}
 cartographer status                # is repo indexed?
 cartographer repo list
-cartographer --json search --help
+cartographer ask --help
 ```
 
 - Check `repo` name: `list_repos` / `cartographer repo list` → pass `-r RepoName`.
@@ -79,6 +79,12 @@ cartographer mcp start --verbose --db /tmp/test.db
 DB path mirrors CLI: `--db` > `$CARTOGRAPHER_DB` > `CWD/.cartographer/config.json` → `.cartographer/data.db`. Verify with `cartographer --json status` vs `MCP status()`.
 
 VS Code `ClientManager` tries MCP then CLI fallback; check `McpClient` `30s` timeout.
+
+Not configured at all? Run `cartographer setup --check` to see which agents are wired, then `cartographer setup --scope global` (or `--scope project` inside a repo).
+
+### Graph shows only part of the repo / Load More stalls
+
+The graph is sampled (`graph-data -l N`, default `graphLimit 400`). Keep pressing **+ Load More** — it follows the `next_offset` cursor until `All loaded ✓`. If a page adds nothing, the next offset still advances past the overlapping hubs. For a full-repo view, raise `cartographer.graphLimit` (VS Code settings) or `.cartographer/config.json` `graphLimit`, then Reset View. Very large graphs: use type-filter chips and **Pause layout** to stay interactive.
 
 ### Wrong repo returned
 

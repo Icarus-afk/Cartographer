@@ -43,20 +43,22 @@ pip install -e ".[dev,watch]"
 
 ```
 cartographer/           # Python package (CLI + MCP server)
-  cli.py                # Click CLI (30 commands)
-  mcp/                  # MCP server (14 tools, 3 resources)
+  cli.py                # Click CLI (26 commands + git/repo/db/mcp groups)
+  mcp/                  # MCP server (20 tools, 3 resources)
   ingestion/            # File discovery + indexing
   parser/               # 20 tree-sitter language parsers
-  graph/                # Knowledge graph builder
+  graph/                # Knowledge graph builder + graph-data paging
   embedding/            # Vector embeddings (384-dim)
   query/                # Search + traversal
   architecture/         # Architecture detection
   compression/          # Token-aware compression
   git/                  # Git intelligence
+  setup/                # One-command installer (MCP configs + VS Code ext)
   storage/              # SQLite persistence
 editors/vscode/         # VS Code extension (TypeScript)
 docs/                   # Documentation
-tests/                  # Test suite (73+ tests)
+install.sh              # One-command full-suite installer
+tests/                  # Test suite (90 tests)
 ```
 
 ## Style Guide

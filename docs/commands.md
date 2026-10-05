@@ -17,6 +17,18 @@ Output: `db_path, exists, size_bytes, counts {repos,nodes,edges,embeddings}, rep
 
 `doctor` and `health` are aliases.
 
+## `cartographer setup [path] [--agents ...] [--scope project|global|all] [--with-vscode] [--with-index] [--check] [--dry-run]`
+
+One-command full-suite setup: writes MCP configs for opencode (project + global), Claude Desktop, Cursor, Windsurf, VS Code (`.vscode/mcp.json`), Roo — merging with existing files, never wiping them — and installs the VS Code/Cursor extension from the bundled `.vsix`.
+
+```bash
+cartographer setup --with-index              # project configs + extension + index
+cartographer setup --scope global             # global agent configs only
+cartographer setup --agents opencode,cursor --scope project
+cartographer setup --check                    # report status, write nothing
+cartographer --json setup --with-index
+```
+
 ## `cartographer init [path] [--force]`
 
 Init project DB + index. Warns if already indexed (`init . --force` to re-index).
@@ -154,10 +166,13 @@ cartographer file-summary src/auth/service.py
 JSON for viz (always JSON, even without `--json`).
 
 ```bash
-cartographer graph-data --limit 80 --dir src/ --expand-node-id 123
+cartographer graph-data -l 80 --dir src/ --expand-node-id 123
+# page through a large graph:
+cartographer --json graph-data -l 500        # → {nodes:[...500], next_offset:62, has_more:true, ...}
+cartographer --json graph-data -l 500 -o 62  # next page; repeat while has_more
 ```
 
-Returns `{total_nodes,total_edges,node_types,nodes[],edges[],directories[]}`. Hubs via `degree` CTE (`hub_count=max(5,limit/8)`), pagination `offset`, `dir` filter.
+Returns `{total_nodes,total_edges,node_types,next_offset,has_more,nodes[],edges[],directories[]}`. Hub sampler ranks nodes by degree (`hub_count=max(5,limit/8)`, see `graph/paging.py`), takes `hub_count` seeds from `offset`, then pulls 1-hop neighbours up to `limit`. **`offset` counts hub seeds, not nodes** — always advance with the returned `next_offset`, never `offset += limit`. `dir` filters by path prefix; `--expand-node-id` returns one ego network (`has_more:false`).
 
 ## `cartographer watch [path] [-v]`
 

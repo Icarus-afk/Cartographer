@@ -1,6 +1,6 @@
 # Benchmarks
 
-Measured after the robustness overhaul (`31 languages`, `20 MCP tools`, `84 tests`).
+Measured after the robustness overhaul (`31 languages`, `20 MCP tools`, `90 tests`).
 
 ## Corpus
 
@@ -11,7 +11,7 @@ Measured after the robustness overhaul (`31 languages`, `20 MCP tools`, `84 test
 Example large repo (Django-sized): **2,356 files, 62k nodes, 178k edges**
 
 - Indexing: `~2.4s / 152 files` on 8 workers (`parsing 10%/20%…` logs), sort by path for determinism.
-- Graph ops: `graph_data` with `limit 80` + `offset` pagination; `degree` CTE avoids `O(n*m)`.
+- Graph ops: `graph_data` with `limit 80` + `next_offset` cursor pagination; `degree` CTE avoids `O(n*m)`.
 - Discover: `present` dirs handled via `while parent != root`, `10MiB` cap avoids OOM.
 
 ## Tokens (why LLMs need Cartographer)
@@ -56,4 +56,4 @@ Use cartographer tools, not raw reads:
 - `graphLimit 400` / `maxResults 40` (per-project)
 - `busy_timeout 5000`, `WAL`, chunked inserts.
 
-Reproduce: `pip install -e ".[dev]" && make test` (84 tests) + `cartographer index /path && cartographer --json status`.
+Reproduce: `pip install -e ".[dev]" && make test` (90 tests) + `cartographer index /path && cartographer --json status`.

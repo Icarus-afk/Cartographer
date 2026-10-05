@@ -115,13 +115,15 @@ Detects `controller | business | data | presentation | api | middleware | config
 
 ## MCP for AI agents (one-time)
 
-`opencode.json` is already configured:
+`cartographer setup` (above) already wrote the configs and merges cleanly on re-run. Manual equivalents:
+
+`opencode.json`:
 
 ```json
 { "mcp": { "cartographer": { "type": "local", "command": ["cartographer-mcp"], "enabled": true } } }
 ```
 
-For Claude Desktop `claude_desktop_config.json`:
+Claude Desktop (`claude_desktop_config.json`), Cursor (`~/.cursor/mcp.json`), Windsurf (`~/.codeium/windsurf/mcp_config.json`):
 
 ```json
 { "mcpServers": { "cartographer": { "command": "cartographer-mcp", "args": [] } } }
@@ -133,6 +135,8 @@ Start manually:
 cartographer mcp start --verbose
 cartographer mcp start --port 8080   # SSE
 ```
+
+Restart your agent after setup so it picks up the MCP server.
 
 Tools (20): `status, doctor, health, list_repos, ensure_indexed, search, impact, neighbors, path, summarize, architecture, similar, ask, graph_data, index, context, update_index, delete_file, db_info, file_summary` + resources `cartographer://repos`.
 
