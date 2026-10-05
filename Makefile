@@ -1,4 +1,4 @@
-.PHONY: install install-dev lint test test-verbose clean build
+.PHONY: install install-dev install-full setup lint test test-verbose clean build
 
 install:
 	pip install -e .
@@ -6,6 +6,12 @@ install:
 install-dev:
 	pip install -e ".[dev]"
 	pip install ruff pytest
+
+install-full:
+	./install.sh
+
+setup:
+	cartographer setup --with-vscode
 
 lint:
 	ruff check cartographer/ tests/

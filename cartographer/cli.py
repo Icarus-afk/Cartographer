@@ -294,6 +294,86 @@ def init(ctx, path, force):
 
 @main.command()
 @click.argument("path", default=".", type=click.Path(exists=True, file_okay=False))
+@click.option("--agents", default="all", help="Agent list or 'all'")
+@click.option("--scope", default="all", type=click.Choice(["all", "project", "global"]))
+@click.option("--with-vscode/--no-vscode", default=True, help="Install VS Code/Cursor extension")
+@click.option("--with-index/--no-index", default=False, help="Index the project after setup")
+@click.option("--check", is_flag=True, help="Report install status without writing")
+@click.option("--dry-run", is_flag=True, help="Show what would change without writing")
+@click.option("--yes", "-y", is_flag=True, help="Non-interactive")
+@click.pass_context
+def setup(ctx, path, agents, scope, with_vscode, with_index, check, dry_run, yes):
+    """One-command full-suite setup: MCP configs for all agents + VS Code extension.
+
+    Example:
+      cartographer setup
+      cartographer setup --agents opencode,cursor --scope project
+      cartographer setup --check
+      cartographer --json setup --with-index
+    """
+    from cartographer.setup.engine import AGENTS, check_setup, run_setup
+
+    project = Path(path).resolve()
+    if check:
+        report = check_setup(project)
+        if _is_json(ctx):
+            _emit(ctx, {"status": "ok", "project": str(project), "report": report})
+        else:
+            click.echo(f"Project: {project}")
+            click.echo(f"Python: {report['python']}")
+            click.echo(f"CLI: {report['cli'] or 'NOT FOUND'}")
+            click.echo(f"MCP: {report['mcp'] or 'NOT FOUND'}")
+            click.echo(f"VSIX: {report['vsix'] or 'NOT FOUND'}")
+            click.echo("")
+            click.echo("MCP configs:")
+            for label, info in report["configs"].items():
+                mark = "✓" if info["configured"] else ("○" if info["exists"] else "✗")
+                click.echo(f"  {mark} {label}: {info['path']}")
+        return
+    wanted = AGENTS if agents.strip() == "all" else tuple(
+        a.strip() for a in agents.split(",") if a.strip() in AGENTS
+    )
+    if not wanted:
+        _emit_error(ctx, f"Unknown --agents '{agents}'", hint=f"Choose from: {', '.join(AGENTS)}")
+    result = run_setup(
+        project, agents=wanted, scope=scope,
+        with_vscode=with_vscode, with_index=with_index, dry_run=dry_run,
+    )
+    payload = {
+        "status": "ok",
+        "project": str(project),
+        "configured": result.configured,
+        "skipped": result.skipped,
+        "errors": result.errors,
+        "vscode": result.vscode,
+        "details": result.details,
+    }
+    if _is_json(ctx):
+        _emit(ctx, payload)
+        if result.errors:
+            raise SystemExit(1)
+        return
+    click.echo(f"Cartographer setup: {project}")
+    for line in result.configured:
+        click.echo(f"  ✓ {line}")
+    for line in result.skipped:
+        click.echo(f"  ○ {line}")
+    if result.vscode:
+        click.echo(f"  VS Code: {result.vscode}")
+    if with_index:
+        click.echo("  Indexed project graph")
+    if dry_run:
+        click.echo("  (dry-run: nothing written)")
+    if result.errors:
+        for err in result.errors:
+            click.echo(f"  ✗ {err}", err=True)
+        raise SystemExit(1)
+    click.echo("")
+    click.echo("Done. Restart your agent (opencode/Cursor/Claude) to load MCP.")
+
+
+@main.command()
+@click.argument("path", default=".", type=click.Path(exists=True, file_okay=False))
 @click.pass_context
 def index(ctx, path):
     """Index a repository into the knowledge graph.

@@ -2,7 +2,26 @@
 
 You can be productive in 2 minutes — one command indexes, the next answers.
 
-## Install
+## Install (one command)
+
+Full suite — python package + VS Code/Cursor extension + MCP for all agents:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Icarus-afk/Cartographer/main/install.sh | bash
+# or from a clone:
+./install.sh
+```
+
+Per-project (inside your repo — writes `opencode.json`, `.vscode/mcp.json`, `.roo/mcp.json`):
+
+```bash
+cd your-repo
+cartographer setup --with-index
+cartographer setup --check        # verify without writing
+cartographer setup --scope global # global agent configs only
+```
+
+Manual install:
 
 ```bash
 git clone https://github.com/Icarus-afk/Cartographer.git
