@@ -41,7 +41,7 @@ export interface PathResult {
 
 export interface GraphNode { id: number; name: string; type: string; file_path?: string }
 export interface GraphEdge { source: number; target: number; type: string }
-export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; node_types: Record<string, number>; total_nodes?: number; total_edges?: number; directories?: { path: string; count: number }[] }
+export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; node_types: Record<string, number>; total_nodes?: number; total_edges?: number; directories?: { path: string; count: number }[]; next_offset?: number; has_more?: boolean }
 
 export interface RepoInfo { name: string; path: string; nodes: number; edges: number }
 
@@ -472,7 +472,7 @@ export class CartographerClient {
       // MCP returns {status:"ok",data:{nodes,...}} while CLI returns {nodes,...} directly
       const d = (parsed && typeof parsed === "object" && "data" in parsed && parsed.data && typeof parsed.data === "object" && "nodes" in parsed.data) ? (parsed as any).data : parsed;
       const err = (d as any)?.error || (parsed as any)?.error;
-      if (err) { this.output.appendLine(`getGraphData error: ${err}`); return { nodes: [], edges: [], node_types: {}, directories: [] }; }
+      if (err) { this.output.appendLine(`getGraphData error: ${err}`); return { nodes: [], edges: [], node_types: {}, directories: [], next_offset: 0, has_more: false }; }
       // Normalize to ensure numbers are always finite
       const nodes = Array.isArray((d as any).nodes) ? (d as any).nodes : [];
       const edges = Array.isArray((d as any).edges) ? (d as any).edges : [];
@@ -480,10 +480,12 @@ export class CartographerClient {
       const directories = Array.isArray((d as any).directories) ? (d as any).directories : [];
       const total_nodes = this.toNumber((d as any).total_nodes ?? (d as any).totalNodes ?? nodes.length);
       const total_edges = this.toNumber((d as any).total_edges ?? (d as any).totalEdges ?? edges.length);
-      return { nodes, edges, node_types, directories, total_nodes, total_edges };
+      const next_offset = this.toNumber((d as any).next_offset ?? (d as any).nextOffset ?? 0);
+      const has_more = (d as any).has_more ?? (d as any).hasMore ?? nodes.length > 0;
+      return { nodes, edges, node_types, directories, total_nodes, total_edges, next_offset, has_more: !!has_more };
     } catch (e) {
       this.output.appendLine(`getGraphData failed: ${e}`);
-      return { nodes: [], edges: [], node_types: {}, directories: [] };
+      return { nodes: [], edges: [], node_types: {}, directories: [], next_offset: 0, has_more: false };
     }
   }
 

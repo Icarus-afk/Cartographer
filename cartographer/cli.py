@@ -1240,7 +1240,7 @@ def git_authors(ctx, repo, limit):
 @main.command(name="graph-data")
 @click.option("--repo", "-r", help="Repository name")
 @click.option("--limit", "-l", default=80, help="Max nodes to sample")
-@click.option("--offset", "-o", default=0, help="Skip N hub groups for pagination")
+@click.option("--offset", "-o", default=0, help="Hub-seed cursor (use next_offset from previous page)")
 @click.option("--dir", "-d", "dir_filter", default=None, help="Filter by directory prefix")
 @click.option("--expand-node-id", type=int, default=None,
               help="Expand neighbors of a specific node ID")
@@ -1249,6 +1249,7 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
     """Output graph data as JSON for the VS Code extension."""
     import json
 
+    from cartographer.graph.paging import hub_page_size, next_offset as _next_offset
     from cartographer.storage.connection import get_connection
     conn = get_connection(ctx.obj["db_path"])
 
@@ -1270,6 +1271,8 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
     ).fetchall())
 
     all_ids: list[int] = []
+    dir_clause = ""
+    dir_params: list = []
 
     if expand_node_id is not None:
         all_ids = [expand_node_id]
@@ -1287,8 +1290,6 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
             if r[0] not in all_ids and len(all_ids) < limit:
                 all_ids.append(r[0])
     else:
-        dir_clause = ""
-        dir_params: list = []
         if dir_filter:
             dir_clause = "AND n.file_path LIKE ?"
             dir_params.append(dir_filter + "%")
@@ -1346,10 +1347,21 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
             for r in remaining:
                 all_ids.append(r[0])
 
+    hub_total = conn.execute(
+        f"SELECT COUNT(*) FROM nodes n WHERE n.repository_id = ? {dir_clause}",
+        (repo_id, *dir_params),
+    ).fetchone()[0]
+    page = hub_page_size(limit)
+    cursor = 0 if expand_node_id is not None else _next_offset(offset, limit)
+    more = False if expand_node_id is not None else (offset + page) < hub_total
+
     final_ids = all_ids[:limit]
     if not final_ids:
         conn.close()
-        empty = {"nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0, "node_types": type_counts}
+        empty = {
+            "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0,
+            "node_types": type_counts, "next_offset": cursor, "has_more": more,
+        }
         click.echo(json.dumps(empty))
         return
 
@@ -1394,6 +1406,8 @@ def graph_data(ctx, repo, limit, offset, dir_filter, expand_node_id):
         "total_nodes": total_nodes,
         "total_edges": total_edges,
         "node_types": type_counts,
+        "next_offset": cursor,
+        "has_more": more,
         "nodes": [{"id": n[0], "name": n[1], "type": n[2], "file_path": n[3]} for n in nodes_list],
         "edges": [{"source": e[0], "target": e[1], "type": e[2]} for e in edges],
         "directories": [{"path": r[0], "count": r[1]} for r in dir_rows],

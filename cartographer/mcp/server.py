@@ -526,7 +526,7 @@ def ask(
 
 @mcp().tool(
     name="graph_data",
-    description="Export graph data as JSON for visualization. Supports pagination and filtering. Params: repo, limit (1-500), offset (pagination), dir (filter by directory prefix e.g. 'src/'), expand_node_id (expand neighbors of node). Returns JSON {nodes, edges, total_nodes, total_edges, directories}. Example: graph_data(limit=80, dir=\"src/\")",
+    description="Export graph data as JSON for visualization. Supports pagination and filtering. Params: repo, limit (1-500), offset (hub-seed cursor — use next_offset from previous page), dir (filter by directory prefix e.g. 'src/'), expand_node_id (expand neighbors of node). Returns JSON {nodes, edges, total_nodes, total_edges, directories, next_offset, has_more}. Example: graph_data(limit=80, dir=\"src/\")",
 )
 def graph_data(
     repo: str | None = None,
@@ -537,6 +537,8 @@ def graph_data(
     db: str | None = None,
 ) -> str:
     import json as _json
+    from cartographer.graph.paging import hub_page_size
+    from cartographer.graph.paging import next_offset as _next_offset
     limit=_clamp(limit,1,500,80)
     offset=max(0, int(offset) if isinstance(offset,int) else 0)
     conn = _get_conn(db)
@@ -575,10 +577,24 @@ def graph_data(
     else:
         all_ids = _graph_hub_nodes(conn, repo_id, limit, offset, dir)
 
+    dir_clause = ""
+    dir_params: list = []
+    if dir:
+        dir_clause = "AND n.file_path LIKE ?"
+        dir_params.append(dir + "%")
+    hub_total = conn.execute(
+        f"SELECT COUNT(*) FROM nodes n WHERE n.repository_id = ? {dir_clause}",
+        (repo_id, *dir_params),
+    ).fetchone()[0]
+    page = hub_page_size(limit)
+    cursor = 0 if expand_node_id is not None else _next_offset(offset, limit)
+    more = False if expand_node_id is not None else (offset + page) < hub_total
+
     if not all_ids:
         conn.close()
         empty = {"nodes": [], "edges": [],
-                 "total_nodes": 0, "total_edges": 0, "node_types": type_counts}
+                 "total_nodes": 0, "total_edges": 0, "node_types": type_counts,
+                 "next_offset": cursor, "has_more": more}
         return _ok(empty)
 
     ph = ",".join("?" for _ in all_ids)
@@ -623,6 +639,8 @@ def graph_data(
         "total_nodes": total_nodes,
         "total_edges": total_edges,
         "node_types": type_counts,
+        "next_offset": cursor,
+        "has_more": more,
         "nodes": [{"id": n[0], "name": n[1], "type": n[2], "file_path": n[3]} for n in nodes_list],
         "edges": [{"source": e[0], "target": e[1], "type": e[2]} for e in edges],
         "directories": [{"path": p, "count": c} for p, c in dirs],
